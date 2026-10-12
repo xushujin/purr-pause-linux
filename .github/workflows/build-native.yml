@@ -1,0 +1,95 @@
+name: Build PurrPause Linux (Rust/GTK4)
+
+on:
+  push:
+    tags:
+      - 'v*'
+    branches:
+      - main
+      - master
+  pull_request:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+
+jobs:
+  build-linux:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config \
+            libgtk-4-dev libadwaita-1-dev \
+            libmpv-dev \
+            libssl-dev \
+            librsvg2-bin imagemagick \
+            desktop-file-utils dpkg-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: native
+
+      # 序列号一致性校验。
+      # fixtures.json 含私钥 seed，已 gitignore，因此公开仓库的 CI 跑的是
+      # 「无密钥自检」分支：校验序列号解析顺序、验签链路与抗篡改。
+      # 本地持有 fixtures.json 时会跑完整分支（含签名字节逐字节比对）。
+      - name: License signature parity test
+        run: |
+          cd tools/sig-fixtures
+          mkdir -p src
+          cp verify.rs src/main.rs
+          cargo run --quiet
+          rm -rf src target Cargo.lock
+
+      - name: Build
+        working-directory: native
+        run: ./build-deb.sh
+
+      - name: Verify deb structure
+        working-directory: native
+        run: |
+          set -euo pipefail
+          DEB="$(ls dist/purr-pause-linux_*.deb | head -1)"
+          echo "产物: $DEB"
+          # ar 归档格式校验：三个成员必须齐全且顺序正确
+          ar t "$DEB"
+          # control.tar.gz 内须含 DEBIAN/control
+          tmp="$(mktemp -d)"
+          ( cd "$tmp" && ar x "$OLDPWD/$DEB" && \
+            tar tzf control.tar.gz | grep -qx 'DEBIAN/control' && \
+            tar xzf data.tar.gz && \
+            test -x usr/bin/purr-pause-linux && \
+            test -f usr/share/purr-pause-linux/config.json && \
+            ls usr/share/purr-pause-linux/webm/*.webm >/dev/null && \
+            test -f usr/share/applications/purr-pause-linux.desktop && \
+            test -f usr/share/icons/hicolor/scalable/apps/purr-pause-linux.svg )
+          rm -rf "$tmp"
+          echo "deb 结构校验通过"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: purr-pause-linux
+          path: native/dist/purr-pause-linux_*.deb
+
+  release:
+    needs: [build-linux]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/purr-pause-linux/*.deb
+          generate_release_notes: true

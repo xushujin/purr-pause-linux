@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=胖猫暂停一下 Linux
+GenericName=屏幕休息提醒
+Comment=一只胖猫提醒你适时休息
+Exec=purr-pause-linux
+Icon=purr-pause-linux
+Terminal=false
+Categories=Utility;
+Keywords=health;eyecare;break;reminder;
+StartupNotify=false
+X-GNOME-Autostart-enabled=true

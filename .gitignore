@@ -1,0 +1,95 @@
+# ============================================================================
+# PurrPause Linux — .gitignore
+#
+# ⚠️ 安全红线（改动前请务必阅读）
+#
+#   tools/keygen.js            含 Ed25519 发号私钥。公开仓库一旦提交，
+#                              任何人都能生成任意天数的序列号绕过付费。
+#   tools/sig-fixtures/fixtures.json
+#                              含 ed25519-dalek 测试夹具 + 私钥 seed。
+#   .workbuddy/memory/*.md     开发日志，历史上写入过私钥 seed 明文。
+#
+#   这三项已在下方忽略。若你确实需要保留发号能力，请改用
+#   环境变量注入私钥（见 tools/keygen.example.js），切勿提交真实私钥。
+#   私钥备份位置：~/purr-pause-backup-private/
+# ============================================================================
+
+# ---- 敏感文件：绝对不能提交 ----------------------------------------------
+# 发号工具（含 Ed25519 私钥明文）
+tools/keygen.js
+# 签名回归夹具（含私钥 seed）
+tools/sig-fixtures/fixtures.json
+# 私钥的其他可能落点
+*.pem
+*.key
+*_priv*
+tools/*-private.js
+
+# ---- WorkBuddy 工作区 -----------------------------------------------------
+# 含 memory 日志，可能记录敏感值
+.workbuddy/
+
+# ---- Rust 构建产物 --------------------------------------------------------
+# target/ 体积可达数 GB，且内容完全可由 Cargo.lock 复现
+target/
+**/*.rs.bk
+*.pdb
+# Rust 交叉编译 sysroot（native/setup-sysroot.sh 生成）
+native/target/sysroot/
+native/sysroot/
+
+# ---- 打包产物 -------------------------------------------------------------
+# dist/ 会同时命中 native/dist/ 与未来的顶层 dist/
+dist/
+*.deb
+*.AppImage
+# ar+tar 回退路径的中间产物（build-deb.sh 第 106-112 行生成）
+.build-*.tar.gz
+.build-debian-binary
+
+# ---- 运行时数据 -----------------------------------------------------------
+# 数据目录：~/.local/share/purr-pause-linux
+*.log
+logs/
+*.pid
+pids/
+# 用户自替换的 webm 素材（可能体积很大，不入库）
+webm/
+
+# ---- 签名回归测试的临时产物 -----------------------------------------------
+# README 指示的验证流程会 cp verify.rs -> src/main.rs，跑完应清理
+tools/sig-fixtures/src/
+tools/sig-fixtures/target/
+tools/sig-fixtures/Cargo.lock
+
+# ---- Node（仅 tools/keygen.js 依赖 Node 运行，项目本体无 Node 依赖）--------
+node_modules/
+npm-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# ---- 编辑器 / IDE ---------------------------------------------------------
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.\#*
+\#*\#
+
+# ---- 操作系统 -------------------------------------------------------------
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# ---- 临时文件 -------------------------------------------------------------
+*.tmp
+*.temp
+*.bak
+*.orig
+*.rej

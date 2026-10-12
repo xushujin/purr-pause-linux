@@ -1,0 +1,12 @@
+[package]
+name = "purr-sigcheck"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+ed25519-dalek = { version = "2", features = ["rand_core"] }
+hex = "0.4"
+
+[[bin]]
+name = "purr-sigcheck"
+path = "src/main.rs"
