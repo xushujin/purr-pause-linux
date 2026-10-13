@@ -121,10 +121,10 @@ impl CatOverlay {
             let c = ctx.clone();
             gl_area.connect_render(move |area, _gl_ctx| {
                 // mpv 只在「已 current」的 GL 上下文上发指令，
-                // 因此每帧都要先把本GLArea 的上下文设为 current。
+                // 因此每帧都要先把本 GLArea 的上下文设为 current。
                 area.make_current();
                 if c.player.borrow().is_none() {
-                    match VideoPlayer::new() {
+                    match VideoPlayer::new(area) {
                         Ok(p) => *c.player.borrow_mut() = Some(p),
                         Err(e) => {
                             eprintln!("[purr-pause-linux] 视频初始化失败：{e}");
@@ -138,6 +138,17 @@ impl CatOverlay {
                     p.draw(w, h);
                 }
                 glib::Propagation::Proceed
+            });
+        }
+
+        // GL 上下文销毁前释放 mpv render context（此时上下文通常仍可 current，
+        // 便于 mpv 正常回收它创建的 GL 资源）。
+        {
+            let c = ctx.clone();
+            gl_area.connect_unrealize(move |_area| {
+                if let Some(p) = c.player.borrow_mut().as_mut() {
+                    p.shutdown();
+                }
             });
         }
 
@@ -256,24 +267,33 @@ impl CatOverlay {
                     }
                     drop(p);
 
-                    // 等窗口拿到真实尺寸后启动位置动画
+                    // 等窗口拿到真实尺寸后启动位置动画。
+                    // 注意：GTK4 的 Widget::size(orientation) 是 GTK3 语义（按方向取单轴），
+                    // 没有无参版本，故用 width()/height() 分别取。
                     let c2 = ctx_boot.clone();
                     let m2 = mode.clone();
                     glib::timeout_add_local_once(Duration::from_millis(30), move || {
-// GTK4 的 Widget::size(orientation) 返回单轴尺寸（GTK3 语义），
-      // 没有无参版本，故用 width()/height() 分别取。
-      let w = c2.frame.width();
-      let h = c2.frame.height();
-                if w <= 1 || h <= 1 {
-                    return;
-                }
+                        let w = c2.frame.width();
+                        let h = c2.frame.height();
+                        if w <= 1 || h <= 1 {
+                            return;
+                        }
                         init_state(&c2, &m2, w as f64, h as f64);
                         spawn_walk_loop(c2, m2, w as f64, h as f64);
                     });
                 }
 
-                // 帧驱动：GL 区域需持续重绘才能推进视频
-                ctx_boot.gl_area.queue_render();
+                // 帧驱动：只在 mpv 报告「有新帧」时重绘（避免无谓的全屏重绘）。
+                // update 标志由 mpv 的 update 回调置位，可跨线程安全读取。
+                let need_redraw = ctx_boot
+                    .player
+                    .borrow()
+                    .as_ref()
+                    .map(|p| p.take_update_flag())
+                    .unwrap_or(false);
+                if need_redraw {
+                    ctx_boot.gl_area.queue_render();
+                }
 
                 // 走路结束 → 切躺下+ 显示遮罩 + 启动倒计时
                 *elapsed.borrow_mut() += 1;
