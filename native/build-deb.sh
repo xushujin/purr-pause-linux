@@ -76,7 +76,6 @@ trap 'rm -rf "$STAGE"' EXIT
 echo "==> 装配 $PKG"
 install -d "$STAGE/DEBIAN"
 install -d "$STAGE/usr/bin"
-install -d "$STAGE/usr/lib/$ARCH"
 install -d "$STAGE/usr/share/purr-pause-linux/webm"
 install -d "$STAGE/usr/share/purr-pause-linux/data"
 install -d "$STAGE/usr/share/icons/hicolor/256x256/apps"
@@ -85,13 +84,11 @@ install -d "$STAGE/usr/share/applications"
 
 install -m 0755 "$BIN_PATH" "$STAGE/usr/bin/purr-pause-linux"
 
-# 动态库：libmpv 是运行时依赖（大部分系统已装 mpv）
-for lib in libmpv.so.2; do
-  found="$(ldconfig -p | grep -oP "$lib\s*=>\s*\K[^ ]+" | head -1 || true)"
-  if [[ -n "${found:-}" && -f "$found" ]]; then
-    install -m 0755 "$found" "$STAGE/usr/lib/$ARCH/"
-  fi
-done
+# 不打包 libmpv：deb 的 control 里已声明 `Depends: libmpv2`，
+# 由系统包管理器负责。此前这里会把 libmpv.so.2 复制到 /usr/lib/$ARCH/，
+# 但该路径（如 /usr/lib/amd64）**不是动态链接器的搜索路径**
+# （标准路径是 /usr/lib/x86_64-linux-gnu），等于塞了份几个 MB 的死文件。
+# 若将来确实需要内置（目标系统无 libmpv2），应放到正确路径并在 postinst 里 ldconfig。
 
 install -m 0644 data/webm/*.webm "$STAGE/usr/share/purr-pause-linux/webm/"
 install -m 0644 data/config.json "$STAGE/usr/share/purr-pause-linux/config.json"
@@ -126,6 +123,12 @@ mkdir -p dist
 
 # 优先用 dpkg-deb（会处理权限与所有者）；缺失时退回纯 ar+tar 组装。
 # 纯 ar 方案在 macOS / 无 dpkg 环境下也能工作，产物同样可被 dpkg 安装。
+#
+# ⚠️ 两条路径产出的**压缩后缀不同**，校验/解包时不要硬编码：
+#     dpkg-deb（CI / Debian 系）→ control.tar.zst / data.tar.zst
+#       （Ubuntu 21.10 起 dpkg 默认用 zstd）
+#     ar+tar 回退（macOS）      → control.tar.gz / data.tar.gz
+#   两者都是合法的 deb；dpkg 与 `dpkg-deb --contents` 都能透明处理。
 if command -v dpkg-deb >/dev/null 2>&1; then
   dpkg-deb --build --root-owner-group "$STAGE" "dist/${PKG}.deb"
 else

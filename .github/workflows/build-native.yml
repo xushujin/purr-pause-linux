@@ -58,19 +58,49 @@ jobs:
           set -euo pipefail
           DEB="$(ls dist/purr-pause-linux_*.deb | head -1)"
           echo "产物: $DEB"
-          # ar 归档格式校验：三个成员必须齐全且顺序正确
-          ar t "$DEB"
-          # control.tar.gz 内须含 DEBIAN/control
-          tmp="$(mktemp -d)"
-          ( cd "$tmp" && ar x "$OLDPWD/$DEB" && \
-            tar tzf control.tar.gz | grep -qx 'DEBIAN/control' && \
-            tar xzf data.tar.gz && \
-            test -x usr/bin/purr-pause-linux && \
-            test -f usr/share/purr-pause-linux/config.json && \
-            ls usr/share/purr-pause-linux/webm/*.webm >/dev/null && \
-            test -f usr/share/applications/purr-pause-linux.desktop && \
-            test -f usr/share/icons/hicolor/scalable/apps/purr-pause-linux.svg )
-          rm -rf "$tmp"
+
+          # 1) ar 成员名必须是标准名（dpkg 只认这些；带前导点的名字会被拒装）。
+          #    注意压缩后缀是**变的**：Ubuntu 24.04 的 dpkg 默认用 zstd，
+          #    产出 control.tar.zst / data.tar.zst；build-deb.sh 的 ar 回退
+          #    路径（无 dpkg-deb 时）产出 .tar.gz。所以这里不能硬编码后缀。
+          members="$(ar t "$DEB")"
+          echo "--- ar 成员 ---"
+          echo "$members"
+          echo "$members" | grep -qx 'debian-binary' \
+            || { echo "缺少成员: debian-binary"; exit 1; }
+          echo "$members" | grep -qE '^control\.tar(\.[a-z]+)?$' \
+            || { echo "缺少标准命名的 control.tar.* 成员"; exit 1; }
+          echo "$members" | grep -qE '^data\.tar(\.[a-z]+)?$' \
+            || { echo "缺少标准命名的 data.tar.* 成员"; exit 1; }
+
+          # 2) 用 dpkg-deb 自身读取元数据 —— 它能透明处理 gz/xz/zst，
+          #    且包结构不合法时直接报错，比手工 ar+tar 更可靠。
+          echo "--- control 元数据 ---"
+          dpkg-deb --field "$DEB" Package Version Architecture Depends
+
+          # 3) 关键文件清单
+          echo "--- 关键文件 ---"
+          contents="$(dpkg-deb --contents "$DEB")"
+          for f in \
+            usr/bin/purr-pause-linux \
+            usr/share/purr-pause-linux/config.json \
+            usr/share/applications/purr-pause-linux.desktop \
+            usr/share/icons/hicolor/scalable/apps/purr-pause-linux.svg ; do
+            if echo "$contents" | grep -q "$f"; then
+              echo "  OK  $f"
+            else
+              echo "缺少文件: $f"; exit 1
+            fi
+          done
+
+          # 4) 内置 webm 素材必须打进包（否则猫咪动画不可用）
+          n="$(echo "$contents" | grep -c '\.webm$' || true)"
+          if [ "$n" -gt 0 ]; then
+            echo "  OK  $n 个 webm 素材"
+          else
+            echo "deb 内没有 webm 素材"; exit 1
+          fi
+
           echo "deb 结构校验通过"
 
       - name: Upload artifact
