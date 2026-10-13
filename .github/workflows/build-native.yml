@@ -1,16 +1,18 @@
 name: Build PurrPause Linux (Rust/GTK4)
 
+# 触发策略：**只有打 v* tag 才会自动构建**。
+# 推 main / PR 都不再触发 —— CI 只在正式发版时跑一次，
+# 日常提交不会白白消耗构建时间，Actions 页面也不会堆出重复的 run。
+# 代价：push 到 main 之后没有编译校验，破坏性改动要到打 tag 时才会暴露。
+# 若想恢复「PR 上先校验、tag 才发版」，把 pull_request 段加回来即可。
 on:
   push:
     tags:
       - 'v*'
-    branches:
-      - main
-      - master
-  pull_request:
-    branches:
-      - main
-      - master
+
+  # 手动入口：不会自动触发；且手动跑时 github.ref 不是 tag，
+  # 版本一致性检查与 release job 都会被跳过（只产出 artifact，不发版）。
+  # 不需要的话，把下面这行一起删掉即可。
   workflow_dispatch:
 
 # action 版本选择说明（勿凭"大版本号越大越新"随意改）：
@@ -134,20 +136,50 @@ jobs:
         with:
           name: purr-pause-linux
           path: native/dist/purr-pause-linux_*.deb
+          # 没匹配到文件就直接失败，避免"构建绿了但没产物"一路带到发版
+          if-no-files-found: error
 
   # 仅打 v* tag 时运行，产出 GitHub Release 并附上 deb。
-  # 推 main 分支时该 job 会被跳过（这是设计如此，不是配置错误）。
+  # 保留 if 判断是因为手动触发（workflow_dispatch）时 github.ref 不是 tag，
+  # 那种情况下只会产出 artifact，不会误发 Release。
   release:
     needs: [build-linux]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-24.04
     permissions:
       contents: write
+      actions: read # 下载 artifact 需要（一旦显式写 permissions，未列出的权限会变成 none）
     steps:
-      - uses: actions/download-artifact@v8
+      # 指定 name 下载单个 artifact。注意 download-artifact 的目录规则：
+      # 仅当**匹配到多个** artifact 时才会套一层同名子目录；
+      # 只匹配到 1 个时（源码里的 `artifacts.length === 1` 分支）会直接解到 path 下。
+      # 所以实际落地路径是 artifacts/purr-pause-linux_*.deb，而不是
+      # artifacts/purr-pause-linux/purr-pause-linux_*.deb —— 之前就是这里写错，
+      # 导致 files 通配匹配为空、Release 静默地只带着源码发布出去。
+      - name: Download artifact
+        uses: actions/download-artifact@v8
         with:
+          name: purr-pause-linux
           path: artifacts
+
+      # 明确列出下载结果，出问题时一眼能看见；找不到 deb 直接失败。
+      - name: Locate deb
+        run: |
+          set -euo pipefail
+          echo "--- 下载到的文件 ---"
+          find artifacts -type f | sort
+          deb="$(find artifacts -name '*.deb' -type f | head -1)"
+          if [ -z "$deb" ]; then
+            echo "::error::artifact 内没有 .deb，请检查 build 阶段的 Upload artifact 步骤"
+            exit 1
+          fi
+          echo "找到 deb: $deb"
+
       - uses: softprops/action-gh-release@v3
         with:
-          files: artifacts/purr-pause-linux/*.deb
+          # 用递归通配，三种布局（无子目录 / 有子目录 / 保留 native/dist 层级）都能命中
+          files: artifacts/**/*.deb
+          # 通配为空时直接报错 —— 这个 action 的默认值是 false，
+          # 会在没有任何附件的情况下照样把 Release 建出来
+          fail_on_unmatched_files: true
           generate_release_notes: true
