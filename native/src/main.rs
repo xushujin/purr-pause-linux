@@ -95,6 +95,9 @@ fn main() {
         // 首次运行写入素材说明
         write_asset_readme(&data_dir.join("webm"));
 
+        // build_sources 借用 cfg，必须在把 cfg 移入 AppState 之前算好（E0382）
+        let sources = build_sources(&cfg);
+
         let state = Rc::new(RefCell::new(AppState {
             config: cfg,
             active_seconds: 0,
@@ -106,7 +109,7 @@ fn main() {
             overlays: Vec::new(),
             log,
             badge_count: 0,
-            sources: build_sources(&cfg),
+            sources,
             is_screen_locked: false,
         }));
 
@@ -248,8 +251,11 @@ fn trigger_cat(state: &Rc<RefCell<AppState>>, manual: bool) {
         }
     }
 
-    let displays = list_displays();
-    for area in displays {
+    // GTK4 移除了 gtk::gdk::WindowPosition 与 Window::move_()，
+    // 多屏全屏的正确做法是给每个显示器各建一个窗口并调`fullscreen_on_monitor`。
+    // 这比手动算坐标更可靠：Wayland 下compositor 不允许客户端自行定位窗口。
+    let monitors = list_monitors();
+    for monitor in monitors {
         let overlay = CatOverlay::new(
             cfg.animation_mode.clone(),
             break_minutes,
@@ -257,13 +263,9 @@ fn trigger_cat(state: &Rc<RefCell<AppState>>, manual: bool) {
             walk.clone(),
             idle_v.clone(),
         );
-        overlay.window.set_default_size(area.0, area.1);
-        overlay.window.move_(
-            gtk::gdk::WindowPosition::None,
-            area.2,
-            area.3,
-        );
-        overlay.window.fullscreen();
+        let geo = monitor.geometry();
+        overlay.window.set_default_size(geo.width(), geo.height());
+        overlay.window.fullscreen_on_monitor(&monitor);
         overlay.window.present();
         state.borrow_mut().overlays.push(overlay);
     }
@@ -337,22 +339,25 @@ fn snooze_cat(state: &Rc<RefCell<AppState>>) {
     refresh_tray(state);
 }
 
-/// 列出各显示器的工作区 (w, h, x, y)。
-fn list_displays() -> Vec<(i32, i32, i32, i32)> {
-    let mut out = Vec::new();
-    if let Ok(model) = gtk::gdk::Display::default() {
-        for monitor in model.monitors() {
-            let geo = monitor.geometry();
-            out.push((
-                geo.width(),
-                geo.height(),
-                geo.x(),
-                geo.y(),
-            ));
+/// 列出各显示器。
+///
+/// GTK4 的 `Display::monitors()` 返回 `gio::ListModel`，需用 `gio::ListModelExt`
+/// 迭代并 downcast 成 `gdk::Monitor`。取不到时回退为「单个虚拟显示器」，
+/// 让 `fullscreen()` 走默认屏幕，至少保证功能可用。
+fn list_monitors() -> Vec<gtk::gdk::Monitor> {
+    use gtk::gio::prelude::*;
+    use gtk::prelude::*;
+
+    let mut out: Vec<gtk::gdk::Monitor> = Vec::new();
+    if let Some(display) = gtk::gdk::Display::default() {
+        let model = display.monitors();
+        for i in 0..model.n_items() {
+            if let Some(obj) = model.item(i) {
+                if let Ok(m) = obj.downcast::<gtk::gdk::Monitor>() {
+                    out.push(m);
+                }
+            }
         }
-    }
-    if out.is_empty() {
-        out.push((1920, 1080, 0, 0));
     }
     out
 }
@@ -481,34 +486,51 @@ fn poll_once(state: &Rc<RefCell<AppState>>, client: &reqwest::Client) {
         );
         let result = block_on(message::fetch_source(client, &probe, max_items));
 
-        let mut s = state.borrow_mut();
-        let target = &mut s.sources[idx];
-        match result {
-            Ok((total, items)) => {
-                target.consecutive_failures = 0;
-                target.last_error.clear();
-                target.list_in_flight = false;
-                let is_first = target.first_sync;
-                let new_count = message::apply_items(target, items, total);
-                if !is_first && new_count > 0 {
-                    s.log.info(&format!(
-                        "[消息提醒][{name}] 检测到 {new_count} 条新待办"
-                    ));
+        // 先把结果应用到 target 上并取出要记的日志，
+        // 然后释放 target 对 s 的可变借用，才能再借用 s.log（E0502）。
+        let pending: Option<(bool, String)> = {
+            let mut s = state.borrow_mut();
+            let target = &mut s.sources[idx];
+            let entry = match result {
+                Ok((total, items)) => {
+                    target.consecutive_failures = 0;
+                    target.last_error.clear();
+                    target.list_in_flight = false;
+                    let is_first = target.first_sync;
+                    let new_count = message::apply_items(target, items, total);
+                    target.first_sync = false;
+                    // true = info, false = warn
+                    (!is_first && new_count > 0).then(|| {
+                        (
+                            true,
+                            format!("[消息提醒][{name}] 检测到 {new_count} 条新待办"),
+                        )
+                    })
                 }
-                target.first_sync = false;
+                Err(e) => {
+                    target.consecutive_failures += 1;
+                    target.last_error = e.clone();
+                    target.list_in_flight = false;
+                    let n = target.consecutive_failures;
+                    Some((
+                        false,
+                        format!("[消息提醒][{name}] 拉取失败：{e}（连续失败 {n} 次）"),
+                    ))
+                }
+            };
+            s.badge_count = s.sources.iter().filter(|r| r.enabled).map(|r| r.badge_count).sum();
+            entry
+        };
+
+        // 此时已无可变借用
+        match pending {
+            Some((true, msg)) => log_line(state, &msg),
+            Some((false, msg)) => {
+                let s = state.borrow();
+                s.log.warn(&msg);
             }
-            Err(e) => {
-                target.consecutive_failures += 1;
-                target.last_error = e.clone();
-                target.list_in_flight = false;
-                s.log.warn(&format!(
-                    "[消息提醒][{name}] 拉取失败：{e}（连续失败 {} 次）",
-                    target.consecutive_failures
-                ));
-            }
+            None => {}
         }
-        s.badge_count = s.sources.iter().filter(|r| r.enabled).map(|r| r.badge_count).sum();
-        drop(s);
         refresh_tray(state);
     }
 }

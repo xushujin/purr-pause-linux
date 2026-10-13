@@ -1,5 +1,8 @@
 //! 设置窗口：阈值、休息时长、动画模式、素材目录、自启、日志。
 
+// adw 的方法（PreferencesPage::add / ActionRow::set_title 等）来自
+// libadwaita 自己的 Ext trait，gtk::prelude 里没有，必须单独引入。
+use adw::prelude::*;
 // gio 是 gtk4 的依赖，须经 gtk 路径引入（Rust 2018 起不能用裸 crate 名）
 use gtk::gio;
 use gtk::prelude::*;
@@ -8,15 +11,6 @@ use std::path::PathBuf;
 use std::rc::Rc;
 
 use crate::core::config::Config;
-
-pub struct SettingsWindow {
-    pub window: adw::Window,
-}
-
-pub struct SettingsOutcome {
-    pub config: Config,
-    pub closed: bool,
-}
 
 /// 打开设置窗口。回调在用户点击「保存」或关闭窗口时触发。
 pub fn present<F>(current: Config, activated: bool, idle_method: String, on_save: F)
@@ -40,7 +34,7 @@ where
 
     let page = adw::PreferencesPage::new();
     let group = adw::PreferencesGroup::new();
-    group.set_title(Some("计时规则"));
+    group.set_title("计时规则");
     page.add(&group);
 
     // 屏幕使用时间
@@ -73,7 +67,7 @@ where
 
     // 动画模式
     let mode_group = adw::PreferencesGroup::new();
-    mode_group.set_title(Some("猫咪动画"));
+    mode_group.set_title("猫咪动画");
     page.add(&mode_group);
 
     let mode_row = adw::ActionRow::new();
@@ -99,7 +93,7 @@ where
 
     // 素材目录
     let asset_group = adw::PreferencesGroup::new();
-    asset_group.set_title(Some("素材"));
+    asset_group.set_title("素材");
     page.add(&asset_group);
 
     let asset_row = adw::ActionRow::new();
@@ -129,7 +123,9 @@ where
             .and_then(|r| r.downcast::<gtk::Window>().ok());
         let h = dir_holder.clone();
         let sub = subtitle_widget.clone();
-        let done = move |result: Result<gtk::FileDialogError, gtk::gio::File>| {
+        // gtk4 0.11 的回调签名是 Result<gio::File, glib::Error>
+        // （早期版本曾用 gtk::FileDialogError，该类型并不存在）
+        let done = move |result: Result<gtk::gio::File, gtk::glib::Error>| {
             if let Ok(f) = result {
                 if let Some(path) = f.path() {
                     *h.borrow_mut() = path.clone();
@@ -150,7 +146,7 @@ where
 
     // 系统
     let sys_group = adw::PreferencesGroup::new();
-    sys_group.set_title(Some("系统"));
+    sys_group.set_title("系统");
     page.add(&sys_group);
 
     let autostart_row = adw::ActionRow::new();

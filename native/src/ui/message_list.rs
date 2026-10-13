@@ -6,6 +6,10 @@
 //!   - 点击条目用系统默认浏览器打开 targetUrl，成功后本地清理（角标 -1）
 //!   - 仅允许 http(s) 链接
 
+// adw 的方法（AdwWindow::set_content 等）来自 libadwaita 自己的 Ext trait，
+// gtk::prelude 里没有，必须单独引入。
+use adw::prelude::*;
+// gio 是 gtk4 的依赖，须经 gtk 路径引入（Rust 2018 起不能用裸 crate 名）
 use gtk::gio;
 use gtk::prelude::*;
 use std::cell::RefCell;
@@ -66,6 +70,11 @@ pub fn present(state_snapshot: AggregatedState, app_state: Rc<RefCell<AppState>>
 
     window.set_child(Some(&outer));
 
+    // render 闭包会 move 走 app_state / window，
+    // 因此先各克隆一份给它用，外层继续持有原件（否则后面 refresh 用到已移动的值）。
+    let app_state_c = app_state.clone();
+    let window_c = window.clone();
+
     // 渲染一份快照
     let render = {
         let list = list.clone();
@@ -78,11 +87,11 @@ pub fn present(state_snapshot: AggregatedState, app_state: Rc<RefCell<AppState>>
             status.set_text(&status_text(snap));
 
             if !snap.enabled {
-                add_placeholder(&list, "消息提醒未启用\n请在「消息提醒设置」中开启后重试");
+                add_placeholder(&list, "消息提醒未启用\n请在托盘菜单中开启");
                 return;
             }
             if snap.sources.iter().all(|s| !s.enabled) {
-                add_placeholder(&list, "尚未启用任何接口源\n请在「消息提醒设置」中添加并启用接口源");
+                add_placeholder(&list, "尚未启用任何接口源\n请在配置文件的 messageSources 中添加并启用");
                 return;
             }
             if snap.items.is_empty() {
@@ -91,7 +100,7 @@ pub fn present(state_snapshot: AggregatedState, app_state: Rc<RefCell<AppState>>
             }
 
             for item in &snap.items {
-                let row = build_row(item, &app_state, &window);
+                let row = build_row(item, &app_state_c, &window_c);
                 list.append(&row);
             }
         }
@@ -146,7 +155,7 @@ fn add_placeholder(list: &gtk::ListBox, text: &str) {
 fn build_row(
     item: &TodoItem,
     app_state: &Rc<RefCell<AppState>>,
-    window: &gtk::adw::Window,
+    window: &adw::Window,
 ) -> gtk::ListBoxRow {
     let row = gtk::ListBoxRow::new();
     row.add_css_class("message-row");
@@ -175,10 +184,8 @@ fn build_row(
         "label.source-chip {{ color: {}; font-weight: 500; }}",
         source_color(&item.origin_id)
     ));
-    // 注意：provider 需要被持有，这里附加到 label 上避免立即回收
-    unsafe {
-        label_add_provider(&src_label, &css_provider);
-    }
+    // 注意：provider 需要被持有，label_add_provider 内部会leak 一份
+    label_add_provider(&src_label, &css_provider);
     head.append(&src_label);
     box_.append(&head);
 
@@ -272,10 +279,19 @@ fn format_time(iso: &str) -> String {
     format!("{date} {hm}")
 }
 
-// 附加 CssProvider 到 widget（GTK4 推荐做法，但需保持 provider 存活）
-unsafe fn label_add_provider(label: &gtk::Label, provider: &gtk::CssProvider) {
-    // GTK4 中 CssProvider 由内部引用计数管理，add_provider_for_display 更合适。
-    // 这里用 gtk_style_context_add_provider_for_display 的等价能力：
-    // gtk4-rs 暴露 Label::style_context().add_provider()
-    label.style_context().add_provider(provider);
+// 附加 CssProvider（来源标签着色）。
+//
+// GTK4 里 `Widget::style_context()` 已被废弃，正确做法是把 provider
+// 挂到 display 上（全局生效）。provider 需保持存活，否则样式丢失 ——
+// 这里用 Box::leak 让它随进程存活。
+fn label_add_provider(_label: &gtk::Label, provider: &gtk::CssProvider) {
+    let Some(display) = gtk::gdk::Display::default() else {
+        return;
+    };
+    let leaked: &'static gtk::CssProvider = Box::leak(Box::new(provider.clone()));
+    gtk::style_context_add_provider_for_display(
+        &display,
+        leaked,
+        gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
+    );
 }

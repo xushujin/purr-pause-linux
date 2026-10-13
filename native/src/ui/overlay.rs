@@ -259,10 +259,13 @@ impl CatOverlay {
                     let c2 = ctx_boot.clone();
                     let m2 = mode.clone();
                     glib::timeout_add_local_once(Duration::from_millis(30), move || {
-                        let (w, h) = c2.frame.size();
-                        if w <= 1 || h <= 1 {
-                            return;
-                        }
+// GTK4 的 Widget::size(orientation) 返回单轴尺寸（GTK3 语义），
+      // 没有无参版本，故用 width()/height() 分别取。
+      let w = c2.frame.width();
+      let h = c2.frame.height();
+                if w <= 1 || h <= 1 {
+                    return;
+                }
                         init_state(&c2, &m2, w as f64, h as f64);
                         spawn_walk_loop(c2, m2, w as f64, h as f64);
                     });
@@ -420,7 +423,8 @@ fn apply_geometry(ctx: &Ctx, _win_w: f64, _win_h: f64) {
     }
     ctx.gl_area.set_opacity(opacity);
     // Fixed.put 的坐标是子控件左上角，需减去自身尺寸的一半实现居中
-    let (w, h) = ctx.gl_area.size();
+    let w = ctx.gl_area.width();
+    let h = ctx.gl_area.height();
     let cx = (x - w as f64 / 2.0).max(0.0);
     let cy = (y - h as f64 / 2.0).max(0.0);
     ctx.frame.put(&ctx.gl_area, cx, cy);

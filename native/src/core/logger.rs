@@ -1,6 +1,6 @@
 //! 滚动日志（与 lib/logger.js 等价）：单文件 128KB × 5。
 
-use std::fs::{self, File, OpenOptions};
+use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::PathBuf;
 use std::sync::Mutex;

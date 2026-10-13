@@ -1,5 +1,8 @@
 //! 激活窗口：展示机器码、输入序列号、显示授权状态。
 
+// adw 的方法（PreferencesPage::add / ActionRow::set_title 等）来自
+// libadwaita 自己的 Ext trait，gtk::prelude 里没有，必须单独引入。
+use adw::prelude::*;
 // glib 是 gtk4 的依赖，须经 gtk 路径引入（Rust 2018 起不能用裸 crate 名）
 use gtk::glib;
 use gtk::prelude::*;
@@ -39,7 +42,7 @@ where
 
     // 机器码
     let mid_group = adw::PreferencesGroup::new();
-    mid_group.set_title(Some("第1 步：获取机器码"));
+    mid_group.set_title("第1 步：获取机器码");
     mid_group.set_description(Some("把下面的机器码发给开发者，获取对应的序列号。"));
     page.add(&mid_group);
 
@@ -54,7 +57,7 @@ where
 
     // 序列号
     let serial_group = adw::PreferencesGroup::new();
-    serial_group.set_title(Some("第 2 步：输入序列号"));
+    serial_group.set_title("第 2 步：输入序列号");
     page.add(&serial_group);
 
     let serial_row = adw::ActionRow::new();
@@ -91,10 +94,13 @@ where
     btn_box.append(&skip_btn);
     action_row.add(&btn_box);
 
-    // 结果提示直接放进 page 底部
+    // 结果提示：AdwPreferencesPage 只能直接添加 PreferencesGroup，
+    // 所以用一个 Group 承载（Group::add 接受任意 Widget）。
     result_label.set_halign(gtk::Align::Center);
     result_label.set_margin_bottom(12);
-    page.add(&result_label);
+    let result_group = adw::PreferencesGroup::new();
+    result_group.add(&result_label);
+    page.add(&result_group);
 
     window.set_content(Some(&page));
 

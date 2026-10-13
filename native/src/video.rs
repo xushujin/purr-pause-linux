@@ -28,7 +28,6 @@ use std::path::Path;
 use std::ptr;
 use std::sync::OnceLock;
 
-use gtk::prelude::*;
 use mpv::{MpvHandlerBuilder, MpvHandlerWithGl};
 
 // `mpv` crate 0.2.3 是纯 FFI 绑定，**没有 build.rs**，
@@ -90,7 +89,9 @@ unsafe extern "C" fn get_proc_address(
             }
         }
         // 2) dlsym 兜底
-        match lib.get::<libloading::Symbol<'_, *mut c_void>>(sym_name) {
+        // 注意 get::<T>() 已返回 Symbol<'_, T>，
+        // 不能写成 get::<Symbol<'_, *mut c_void>>（会双重包装导致两臂类型不一致）
+        match lib.get::<*mut c_void>(sym_name) {
             Ok(s) => *s,
             Err(_) => ptr::null_mut(),
         }

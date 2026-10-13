@@ -201,9 +201,13 @@ impl Tray {
         } else if let Some(action) = &item.action {
             // 把 Rust 闭包装箱后转成裸指针，作为 signal 的 user_data。
             // 生命周期由 self.callbacks 管理，菜单销毁时统一 drop。
+            //
+            // ⚠️ 必须只装箱一层：若写成 Box::into_raw(Box::new(boxed))，
+            //    存进去的是 *mut Box<dyn Fn()>，而 on_activate 按 *mut Box<dyn Fn()>
+            //    解引用，层级不匹配会读到错误的 vtable（运行时 UB）。
             let boxed: Box<dyn Fn()> = Box::new(move || action());
-            let raw = Box::into_raw(Box::new(boxed)) as *mut c_void;
-            self.callbacks.push(raw as *mut *mut c_void as *mut c_void);
+            let raw = Box::into_raw(boxed) as *mut c_void;
+            self.callbacks.push(raw);
 
             g_signal_connect_data(
                 mi,
@@ -217,6 +221,7 @@ impl Tray {
         mi
     }
 
+    #[allow(dead_code)]
     pub fn set_icon(&mut self, icon_name: &str) {
         if let Ok(icon) = CString::new(icon_name) {
             unsafe {
@@ -254,6 +259,7 @@ pub const INDICATOR_PASSIVE: c_int = 1;
 pub const INDICATOR_ACTIVE: c_int = 0;
 
 /// 判断当前会话是否有可用的托盘宿主。
+#[allow(dead_code)]
 pub fn tray_supported() -> bool {
     std::env::var("XDG_CURRENT_DESKTOP")
         .map(|d| {
