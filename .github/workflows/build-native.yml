@@ -13,11 +13,37 @@ on:
       - master
   workflow_dispatch:
 
+# action 版本选择说明（勿凭"大版本号越大越新"随意改）：
+# Node 20 运行时已于 2026 年移除，runner 会把老 action 强制跑在 Node 24 上并告警。
+# 实测各版本的 runs.using（读 action.yml 得到，不是猜的）：
+#   actions/checkout         v4=node20  v5/v6/v7=node24
+#   actions/upload-artifact  v4=node20  v5=node20(!)  v6/v7=node24
+#   actions/download-artifact v4/v5/v6=node20  v7/v8=node24
+#   softprops/action-gh-release v2=node20  v3=node24
+#   Swatinem/rust-cache      v2 已是 node24，无需改动
+# 注意 upload-artifact 的 v5 与 download-artifact 的 v6 名义上是新大版本，
+# 实际仍是 node20 —— 只有 v6+/v7+ 才切到 node24。
 jobs:
   build-linux:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
+
+      # 打 tag 发版时校验 tag 与项目版本号一致。
+      # deb 的版本取自 native/Cargo.toml（build-deb.sh 从中读取 VERSION），
+      # 与 git tag 之间**没有**自动关联：若打了 v1.0.1 却忘了改 Cargo.toml，
+      # 会静默产出版本号仍为 1.0.0 的包，Release 里看起来就是错版本。
+      - name: Tag / version consistency check
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME#v}"
+          ver="$(grep -m1 '^version' native/Cargo.toml | sed 's/.*"\(.*\)".*/\1/')"
+          echo "tag = $GITHUB_REF_NAME    native/Cargo.toml 版本 = $ver"
+          if [ "$tag" != "$ver" ]; then
+            echo "::error::tag v${tag} 与 native/Cargo.toml 的 ${ver} 不一致。请先同步版本号再打 tag。"
+            exit 1
+          fi
 
       - name: Install build dependencies
         run: |
@@ -104,11 +130,13 @@ jobs:
           echo "deb 结构校验通过"
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: purr-pause-linux
           path: native/dist/purr-pause-linux_*.deb
 
+  # 仅打 v* tag 时运行，产出 GitHub Release 并附上 deb。
+  # 推 main 分支时该 job 会被跳过（这是设计如此，不是配置错误）。
   release:
     needs: [build-linux]
     if: startsWith(github.ref, 'refs/tags/v')
@@ -116,10 +144,10 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: artifacts
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         with:
           files: artifacts/purr-pause-linux/*.deb
           generate_release_notes: true
