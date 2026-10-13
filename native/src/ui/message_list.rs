@@ -11,7 +11,6 @@
 use adw::prelude::*;
 // gio 是 gtk4 的依赖，须经 gtk 路径引入（Rust 2018 起不能用裸 crate 名）
 use gtk::gio;
-use gtk::prelude::*;
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -217,7 +216,10 @@ fn build_row(
     let st = app_state.clone();
     let win = window.clone();
     let win_parent = window.clone();
-    row.connect_activated(move |_| {
+    // 注意：gtk 的行激活信号叫 connect_activate（无 d）；
+    // connect_activated（有 d）是 libadwaita 的 ActionRow 专用信号，
+    // ListBoxRow 不是 ActionRow，加了 adw::prelude 后会「找到方法但不满足 trait bound」。
+    row.connect_activate(move |_| {
         let url = item_id_target(&st, &origin, &item_id);
         if !message::is_http_url(&url) {
             return;
@@ -227,6 +229,10 @@ fn build_row(
         let launcher = gtk::UriLauncher::new(&url);
         let st2 = st.clone();
         let win2 = win.clone();
+        // 外层是 Fn 闭包（connect_activate），不能把捕获的 String move 出去，
+        // 故为内层 FnOnce 闭包各克隆一份（同名遮蔽）。
+        let item_id = item_id.clone();
+        let origin = origin.clone();
         launcher.launch(Some(&win_parent), gio::Cancellable::NONE, move |res| {
             if res.is_err() {
                 // 打开失败不做本地清理，保留待办供用户重试

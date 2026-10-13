@@ -67,7 +67,9 @@ fn main() {
         //   与注释意图相反，会导致同时跑多个托盘与多套计时器。）
         .build();
 
-    app.connect_activate(|app| {
+    // 注意：hold() 已移出本闭包（见下方 main 作用域），
+    // 故此处参数不再使用，用 `_app` 避免 unused_variables 警告。
+    app.connect_activate(|_app| {
         let data_dir = config::data_dir();
         let _ = std::fs::create_dir_all(&data_dir);
         let log_dir = data_dir.join("logs");
@@ -130,12 +132,14 @@ fn main() {
         build_tray(&state);
         start_monitoring(&state);
         start_message_poll(&state);
-
-        // 监听窗口关闭事件（覆盖层全部关闭时允许退出检查）
-        app.hold();
     });
 
-    // 防止无窗口时应用立即退出
+    // 防止无窗口时应用立即退出。
+    //
+    // ⚠️ hold() 的返回值必须绑定到变量：ApplicationHoldGuard 一旦析构，
+    //    保护立刻失效。原先写在 activate 闭包里且未绑定，等于完全没生效
+    //    （闭包返回时 guard 就被丢弃了）。放在 main 作用域可存活至 run() 返回。
+    let _guard = app.hold();
     app.run();
 }
 
@@ -276,14 +280,13 @@ fn trigger_cat(state: &Rc<RefCell<AppState>>, manual: bool) {
     let state_poll = state.clone();
     glib::timeout_add_local(Duration::from_millis(200), move || {
         let events: Vec<OverlayEvent> = {
-            let mut s = state_poll.borrow_mut();
+            let s = state_poll.borrow();
             let mut ev = Vec::new();
             for ov in s.overlays.iter() {
                 ev.extend(ov.take_events());
             }
             ev
         };
-        let mut alive = false;
         for e in events {
             match e {
                 OverlayEvent::Dismissed => {
@@ -294,10 +297,12 @@ fn trigger_cat(state: &Rc<RefCell<AppState>>, manual: bool) {
                 }
             }
         }
-        {
+        // 注意：必须在上面的借用释放之后再取值，且不必先初始化再赋值
+        // （原写法 `let mut alive = false;` 会触发 unused_assignments）
+        let alive = {
             let s = state_poll.borrow();
-            alive = s.is_overlay_showing && !s.overlays.is_empty();
-        }
+            s.is_overlay_showing && !s.overlays.is_empty()
+        };
         if alive {
             glib::ControlFlow::Continue
         } else {
@@ -433,7 +438,7 @@ fn schedule_next(state: &Rc<RefCell<AppState>>, client: &reqwest::Client) {
         s.sources
             .iter()
             .filter(|r| r.enabled && !r.list_url.is_empty())
-            .map(|r| r.poll_interval_secs(base))
+            .map(|r| r.poll_interval_secs(base as i64))
             .min()
             .unwrap_or(base)
     };

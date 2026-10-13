@@ -5,7 +5,6 @@
 use adw::prelude::*;
 // gio 是 gtk4 的依赖，须经 gtk 路径引入（Rust 2018 起不能用裸 crate 名）
 use gtk::gio;
-use gtk::prelude::*;
 use std::cell::RefCell;
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -49,7 +48,7 @@ where
         10.0,
         0.0,
     );
-    let threshold_spin = gtk::SpinButton::new(Some(&threshold_adj), 1.0, 0.0);
+    let threshold_spin = gtk::SpinButton::new(Some(&threshold_adj), 1.0, 0);
     threshold_spin.set_valign(gtk::Align::Center);
     threshold_row.add_suffix(&threshold_spin);
     group.add(&threshold_row);
@@ -60,7 +59,7 @@ where
     break_row.set_subtitle("每次休息持续多久（1-60 分钟）");
     let break_adj =
         gtk::Adjustment::new(current.break_minutes as f64, 1.0, 60.0, 1.0, 5.0, 0.0);
-    let break_spin = gtk::SpinButton::new(Some(&break_adj), 1.0, 0.0);
+    let break_spin = gtk::SpinButton::new(Some(&break_adj), 1.0, 0);
     break_spin.set_valign(gtk::Align::Center);
     break_row.add_suffix(&break_spin);
     group.add(&break_row);
@@ -98,10 +97,12 @@ where
 
     let asset_row = adw::ActionRow::new();
     asset_row.set_title("素材目录");
+    // ActionRow::set_subtitle 收 &str（不是 Option<&str>，也不是 String），
+    // 故两个分支都要退化为借用（注意 set_description 才收 Option<&str>）
     asset_row.set_subtitle(if current.custom_webm_dir.is_empty() {
-        "使用内置素材".to_string()
+        "使用内置素材"
     } else {
-        current.custom_webm_dir.clone()
+        &current.custom_webm_dir
     });
     let pick_btn = gtk::Button::with_label("选择…");
     pick_btn.set_valign(gtk::Align::Center);
@@ -116,6 +117,10 @@ where
     let dir_holder: Rc<RefCell<PathBuf>> = Rc::new(RefCell::new(PathBuf::new()));
     let subtitle_widget = asset_row.clone();
     let pick2 = pick_btn.clone();
+    // dir_holder 会被下面的 move 闭包整体捕获，
+    // 故为「清除」按钮与「保存」按钮各留一份克隆
+    let dir_holder_clear = dir_holder.clone();
+    let dir_holder_save = dir_holder.clone();
     pick_btn.connect_clicked(move |_| {
         let dlg = gtk::FileDialog::new();
         let win = pick2
@@ -138,7 +143,7 @@ where
         }
     });
     let clear2 = clear_btn.clone();
-    let dh2 = dir_holder.clone();
+    let dh2 = dir_holder_clear;
     clear_btn.connect_clicked(move |_| {
         dh2.borrow_mut().clear();
         clear2.set_sensitive(false);
@@ -183,9 +188,8 @@ where
 
     // 保存
     let cfg_cell: Rc<RefCell<Config>> = Rc::new(RefCell::new(current.clone()));
-    let save2 = save_btn.clone();
     let win2 = window.clone();
-    let dir2 = dir_holder.clone();
+    let dir2 = dir_holder_save;
     save_btn.connect_clicked(move |_| {
         let mut c = cfg_cell.borrow_mut();
         c.threshold_minutes = threshold_adj.value() as i64;

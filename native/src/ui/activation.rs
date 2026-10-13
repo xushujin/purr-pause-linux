@@ -5,7 +5,6 @@
 use adw::prelude::*;
 // glib 是 gtk4 的依赖，须经 gtk 路径引入（Rust 2018 起不能用裸 crate 名）
 use gtk::glib;
-use gtk::prelude::*;
 
 use crate::license::{self, LicenseStatus};
 
@@ -104,10 +103,14 @@ where
 
     window.set_content(Some(&page));
 
-    // 复制机器码
+    // 复制机器码到系统剪贴板。
+    // 注意：String 没有 copy() 方法（Copy 是标记 trait，String 不实现），
+    // 必须走 gdk 的剪贴板 API。
     let mid2 = mid.clone();
     copy_btn.connect_clicked(move |_| {
-        mid2.copy();
+        if let Some(display) = gtk::gdk::Display::default() {
+            display.clipboard().set_text(&mid2);
+        }
     });
 
     // 激活

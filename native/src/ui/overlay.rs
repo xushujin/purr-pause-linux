@@ -96,7 +96,8 @@ impl CatOverlay {
             .resizable(false)
             .deletable(false)
             .build();
-        window.set_keep_above(true);
+        // 注意：GTK4 删除了 gtk_window_set_keep_above，没有 set_keep_above。
+        // 置顶由 fullscreen() 承担；真正常驻置顶需 gtk4-layer-shell（另开任务）。
         window.set_focusable(false);
         window.fullscreen();
 
@@ -410,8 +411,11 @@ fn spawn_walk_loop(ctx: Rc<Ctx>, mode: String, win_w: f64, win_h: f64) {
 
 /// 把 CatState 里的几何状态应用到 GL 区域上。
 ///
-/// GL 区域本身尺寸固定为素材原始尺寸的缩放结果，通过在 Fixed 容器内
-/// 平移实现「走动」，通过容器整体 opacity 实现淡入淡出。
+/// GL 区域尺寸 = 素材基准高度 × aspect × scale，通过在 Fixed 容器内
+/// 平移实现「走动」，尺寸变化实现「放大/淡入」，opacity 实现淡入淡出。
+///
+/// 注意：必须显式 set_size_request —— GLArea 没有固有尺寸，
+/// 不设置的话宽高恒为 0，视频将完全不可见（scale 也就白算了）。
 fn apply_geometry(ctx: &Ctx, _win_w: f64, _win_h: f64) {
     let (x, y, scale, opacity) = {
         let s = *ctx.state.borrow();
@@ -422,9 +426,14 @@ fn apply_geometry(ctx: &Ctx, _win_w: f64, _win_h: f64) {
         return;
     }
     ctx.gl_area.set_opacity(opacity);
+
+    // 按 scale 计算 GL 区域尺寸（mpv 会把画面缩放到填满当前 FBO）
+    let aspect = *ctx.aspect.borrow();
+    let w = (BASE_CAT_HEIGHT * aspect * scale).round().max(1.0) as i32;
+    let h = (BASE_CAT_HEIGHT * scale).round().max(1.0) as i32;
+    ctx.gl_area.set_size_request(w, h);
+
     // Fixed.put 的坐标是子控件左上角，需减去自身尺寸的一半实现居中
-    let w = ctx.gl_area.width();
-    let h = ctx.gl_area.height();
     let cx = (x - w as f64 / 2.0).max(0.0);
     let cy = (y - h as f64 / 2.0).max(0.0);
     ctx.frame.put(&ctx.gl_area, cx, cy);

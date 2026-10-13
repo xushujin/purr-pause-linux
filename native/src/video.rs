@@ -72,10 +72,9 @@ unsafe extern "C" fn get_proc_address(
     let lib = &*(ctx as *const libloading::Library);
 
     // 1) glGetProcAddress
-    let sym_name = match CStr::from_ptr(name).to_bytes_with_nul() {
-        Ok(s) => s,
-        Err(_) => return ptr::null_mut(),
-    };
+    // 注意：CStr::to_bytes_with_nul 返回 &[u8]，不是 Result（返回 Result 的是 to_str）。
+    // 早期误写成 match Ok/Err，两臂都无法匹配，产生 2 个 E0308。
+    let sym_name: &[u8] = CStr::from_ptr(name).to_bytes_with_nul();
 
     unsafe {
         let get_proc: Result<
@@ -169,6 +168,7 @@ impl VideoPlayer {
         let _ = self.mpv.set_property("pause", false);
     }
 
+    #[allow(dead_code)]
     pub fn pause(&mut self) {
         let _ = self.mpv.set_property("pause", true);
     }
@@ -211,6 +211,7 @@ impl VideoPlayer {
     }
 
     /// 是否有新帧可渲染。
+    #[allow(dead_code)]
     pub fn has_frame(&self) -> bool {
         self.mpv.get_property::<i64>("width").unwrap_or(0) > 0
     }
