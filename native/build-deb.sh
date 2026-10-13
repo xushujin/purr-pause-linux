@@ -29,6 +29,34 @@ need_pkg() {
 }
 need_pkg gtk4
 need_pkg libadwaita-1
+# libmpv 是实际链接依赖（video.rs 有 #[link(name = "mpv")]）
+need_pkg mpv
+
+echo "==> 检查打包所需文件"
+require_file() {
+  if [[ ! -e "$1" ]]; then
+    echo "缺少打包所需文件：$1" >&2
+    echo "提示：若刚 clone 仓库，请确认 .gitignore 未误伤这些文件。" >&2
+    exit 1
+  fi
+}
+require_file data/config.json
+require_file data/README-assets.txt
+require_file debian/control
+require_file debian/postinst
+require_file debian/prerm
+require_file debian/purr-pause-linux.desktop
+
+# 视频素材：内置素材必须随仓库提交，否则 deb 里的猫咪动画不可用。
+# 这里提前检查，避免到「装配」阶段才报 install: cannot stat 这种含糊错误。
+shopt -s nullglob
+WEBM_FILES=(data/webm/*.webm)
+shopt -u nullglob
+if (( ${#WEBM_FILES[@]} == 0 )); then
+  echo "缺少视频素材：data/webm/*.webm" >&2
+  echo "提示：内置素材必须随仓库提交，不要加到 .gitignore。" >&2
+  exit 1
+fi
 
 echo "==> cargo 构建（profile=${PROFILE}）"
 cargo build --profile "$PROFILE"

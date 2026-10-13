@@ -53,8 +53,12 @@ dist/
 logs/
 *.pid
 pids/
-# 用户自替换的 webm 素材（可能体积很大，不入库）
-webm/
+# ⚠️ 不要忽略 webm！native/data/webm/*.webm 是**应用内置素材**，
+#    build-deb.sh 会把它打进 deb 的 /usr/share/purr-pause-linux/webm/。
+#    曾因在这里加了 `webm/` 导致 CI 打包失败：
+#      install: cannot stat 'data/webm/*.webm': No such file or directory
+#    （用户自替换的素材在 ~/.local/share/purr-pause-linux/webm，不在仓库内，
+#      无需忽略。）
 
 # ---- 签名回归测试的临时产物 -----------------------------------------------
 # README 指示的验证流程会 cp verify.rs -> src/main.rs，跑完应清理
