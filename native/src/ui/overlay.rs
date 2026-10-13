@@ -15,6 +15,8 @@
 //! 透明度通过 mpv 的 `alpha-mode` + GTK 的 CSS opacity 组合控制。
 //! 详见 `video.rs` 关于「为何不能用 Cairo」的说明。
 
+// glib 是 gtk4 的依赖，须经 gtk 路径引入（Rust 2018 起不能用裸 crate 名）
+use gtk::glib;
 use gtk::prelude::*;
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
@@ -117,6 +119,9 @@ impl CatOverlay {
         {
             let c = ctx.clone();
             gl_area.connect_render(move |area, _gl_ctx| {
+                // mpv 只在「已 current」的 GL 上下文上发指令，
+                // 因此每帧都要先把本GLArea 的上下文设为 current。
+                area.make_current();
                 if c.player.borrow().is_none() {
                     match VideoPlayer::new() {
                         Ok(p) => *c.player.borrow_mut() = Some(p),

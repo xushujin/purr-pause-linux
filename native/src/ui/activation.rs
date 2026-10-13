@@ -1,5 +1,7 @@
 //! 激活窗口：展示机器码、输入序列号、显示授权状态。
 
+// glib 是 gtk4 的依赖，须经 gtk 路径引入（Rust 2018 起不能用裸 crate 名）
+use gtk::glib;
 use gtk::prelude::*;
 
 use crate::license::{self, LicenseStatus};

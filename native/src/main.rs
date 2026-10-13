@@ -17,6 +17,9 @@ mod message;
 mod ui;
 mod video;
 
+// glib 是 gtk4 的依赖而非本 crate 的直接依赖，
+// Rust 2018 起不能用裸 crate 名，必须经 gtk 路径引入。
+use gtk::glib;
 use gtk::prelude::*;
 use std::cell::RefCell;
 use std::path::PathBuf;

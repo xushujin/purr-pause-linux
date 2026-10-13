@@ -1,5 +1,7 @@
 //! 设置窗口：阈值、休息时长、动画模式、素材目录、自启、日志。
 
+// gio 是 gtk4 的依赖，须经 gtk 路径引入（Rust 2018 起不能用裸 crate 名）
+use gtk::gio;
 use gtk::prelude::*;
 use std::cell::RefCell;
 use std::path::PathBuf;
