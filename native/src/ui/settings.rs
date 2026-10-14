@@ -3,8 +3,6 @@
 // adw 的方法（PreferencesPage::add / ActionRow::set_title 等）来自
 // libadwaita 自己的 Ext trait，gtk::prelude 里没有，必须单独引入。
 use adw::prelude::*;
-// gio 是 gtk4 的依赖，须经 gtk 路径引入（Rust 2018 起不能用裸 crate 名）
-use gtk::gio;
 use std::cell::RefCell;
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -122,25 +120,36 @@ where
     let dir_holder_clear = dir_holder.clone();
     let dir_holder_save = dir_holder.clone();
     pick_btn.connect_clicked(move |_| {
-        let dlg = gtk::FileDialog::new();
         let win = pick2
             .root()
             .and_then(|r| r.downcast::<gtk::Window>().ok());
+        // 用原生目录选择器。
+        // ⚠️ 不能用 gtk::FileDialog —— 它是 GTK 4.10 才新增的，
+        // 而本应用最低要支持 GTK 4.6（Ubuntu 22.04），那里只有
+        // FileChooserNative（4.0 起即有，API 语义等价）。
+        let dlg = gtk::FileChooserNative::new(
+            Some("选择素材目录"),
+            win.as_ref(),
+            gtk::FileChooserAction::SelectFolder,
+            Some("选择"),
+            Some("取消"),
+        );
         let h = dir_holder.clone();
         let sub = subtitle_widget.clone();
-        // gtk4 0.11 的回调签名是 Result<gio::File, glib::Error>
-        // （早期版本曾用 gtk::FileDialogError，该类型并不存在）
-        let done = move |result: Result<gtk::gio::File, gtk::glib::Error>| {
-            if let Ok(f) = result {
-                if let Some(path) = f.path() {
-                    *h.borrow_mut() = path.clone();
-                    sub.set_subtitle(&path.to_string_lossy());
+        // NativeDialog 的响应是信号式（gtk4-rs 里没有同步的 run()）。
+        // 回调参数 `dlg` 即 FileChooserNative 本身，它实现了 FileChooser 接口。
+        dlg.connect_response(move |dlg, resp| {
+            if resp == gtk::ResponseType::Accept {
+                if let Some(f) = dlg.file() {
+                    if let Some(path) = f.path() {
+                        *h.borrow_mut() = path.clone();
+                        sub.set_subtitle(&path.to_string_lossy());
+                    }
                 }
             }
-        };
-        if let Some(w) = win {
-            dlg.select_folder(Some(&w), gio::Cancellable::NONE, done);
-        }
+            dlg.hide();
+        });
+        dlg.show();
     });
     let clear2 = clear_btn.clone();
     let dh2 = dir_holder_clear;

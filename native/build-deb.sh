@@ -3,7 +3,11 @@
 #
 # 依赖（Debian/Ubuntu）：
 #   sudo apt install build-essential pkg-config libgtk-4-dev libadwaita-1-dev \
-#        libmpv-dev libloading-dev librsvg2-bin desktop-file-utils
+#        librsvg2-bin desktop-file-utils
+#
+# 注意：**不需要 libmpv-dev**。本应用不在链接期依赖 libmpv，
+# 而是运行时 dlopen（libmpv.so.2 → libmpv.so.1 依次尝试），
+# 这样同一个二进制在 Ubuntu 22.04（libmpv1）和 24.04+（libmpv2）都能跑。
 #
 # 用法：
 #   ./build-deb.sh              # 构建当前架构
@@ -23,14 +27,13 @@ echo "==> 检查依赖"
 need_pkg() {
   if ! pkg-config --exists "$1"; then
     echo "缺少依赖：$1" >&2
-    echo "请先安装：sudo apt install build-essential pkg-config libgtk-4-dev libadwaita-1-dev libmpv-dev" >&2
+    echo "请先安装：sudo apt install build-essential pkg-config libgtk-4-dev libadwaita-1-dev" >&2
     exit 1
   fi
 }
+# 只检查**链接期**需要的东西；libmpv 是运行时 dlopen，不在此列
 need_pkg gtk4
 need_pkg libadwaita-1
-# libmpv 是实际链接依赖（video.rs 有 #[link(name = "mpv")]）
-need_pkg mpv
 
 echo "==> 检查打包所需文件"
 require_file() {

@@ -215,7 +215,6 @@ fn build_row(
     let origin = item.origin_id.clone();
     let st = app_state.clone();
     let win = window.clone();
-    let win_parent = window.clone();
     // 注意：gtk 的行激活信号叫 connect_activate（无 d）；
     // connect_activated（有 d）是 libadwaita 的 ActionRow 专用信号，
     // ListBoxRow 不是 ActionRow，加了 adw::prelude 后会「找到方法但不满足 trait bound」。
@@ -224,40 +223,38 @@ fn build_row(
         if !message::is_http_url(&url) {
             return;
         }
-        // 用 GTK4 的 UriLauncher 调起系统默认处理器。
-        // （早期版本用的 gio::AppLauncher 在 gio 0.22 中已不存在，会编译失败。）
-        let launcher = gtk::UriLauncher::new(&url);
-        let st2 = st.clone();
-        let win2 = win.clone();
-        // 外层是 Fn 闭包（connect_activate），不能把捕获的 String move 出去，
-        // 故为内层 FnOnce 闭包各克隆一份（同名遮蔽）。
-        let item_id = item_id.clone();
-        let origin = origin.clone();
-        launcher.launch(Some(&win_parent), gio::Cancellable::NONE, move |res| {
-            if res.is_err() {
-                // 打开失败不做本地清理，保留待办供用户重试
-                st2.borrow()
-                    .log
-                    .warn(&format!("打开待办链接失败 id={item_id}"));
-                return;
+        // 调起系统默认处理器打开链接。
+        // ⚠️ 不能用 gtk::UriLauncher —— 它是 GTK 4.10 才新增的，
+        // 而本应用最低要支持 GTK 4.6（Ubuntu 22.04）。
+        // gio 的 launch_default_for_uri 自 GLib 2.0 起就有，gio 0.22 已绑定，
+        // 且不需要父窗口（原生对话框才需要）。
+        // 注意它是**同步**调用（一次 D-Bus 往返，毫秒级），
+        // 换来的是不必再套一层 'static 回调闭包。
+        if let Err(e) = gio::AppInfo::launch_default_for_uri(
+            &url,
+            None::<&gio::AppLaunchContext>,
+        ) {
+            // 打开失败不做本地清理，保留待办供用户重试
+            st.borrow()
+                .log
+                .warn(&format!("打开待办链接失败 id={item_id}：{e}"));
+            return;
+        }
+        // 打开成功后本地清理
+        let mut s = st.borrow_mut();
+        if let Some(rt) = s.sources.iter_mut().find(|r| r.origin_id() == origin) {
+            if message::clear_item(rt, &item_id) {
+                s.badge_count = s
+                    .sources
+                    .iter()
+                    .filter(|r| r.enabled)
+                    .map(|r| r.badge_count)
+                    .sum();
+                s.log.info(&format!("本地清理待办 id={item_id}"));
             }
-            // 打开成功后本地清理
-            let mut s = st2.borrow_mut();
-            if let Some(rt) = s.sources.iter_mut().find(|r| r.origin_id() == origin) {
-                if message::clear_item(rt, &item_id) {
-                    s.badge_count = s
-                        .sources
-                        .iter()
-                        .filter(|r| r.enabled)
-                        .map(|r| r.badge_count)
-                        .sum();
-                    s.log
-                        .info(&format!("本地清理待办 id={item_id}"));
-                }
-            }
-            drop(s);
-            win2.close();
-        });
+        }
+        drop(s);
+        win.close();
     });
 
     row

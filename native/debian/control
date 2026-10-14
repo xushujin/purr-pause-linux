@@ -3,10 +3,11 @@ Version: @VERSION@
 Section: utils
 Priority: optional
 Architecture: @ARCH@
-Depends: libc6 (>= 2.34), libgtk-4-1 (>= 4.10), libadwaita-1-0 (>= 1.5), libmpv2, libssl3
+Depends: libc6 (>= 2.34), libgtk-4-1 (>= 4.6), libadwaita-1-0 (>= 1.1), libmpv2 | libmpv1
 Maintainer: PurrPause <anon_email_dd06c345db5e0837>
 Homepage: https://github.com/xushujin/purr-pause-linux
 Description: 胖猫暂停一下（PurrPause Linux）
  一只胖猫在你盯屏幕太久时走出来挡住你的屏幕，提醒你暂停一下。
  .
  基于 GTK4 + libadwaita 的原生 Linux 应用，低内存占用。
+ 适用于 Ubuntu 22.04+ / Debian 12+ 等 GTK 4.6 及以上的发行版。

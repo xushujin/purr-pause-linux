@@ -53,10 +53,11 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             build-essential pkg-config \
             libgtk-4-dev libadwaita-1-dev \
-            libmpv-dev \
             libssl-dev \
             librsvg2-bin imagemagick \
             desktop-file-utils dpkg-dev
+          # 注意：**不装 libmpv-dev** —— 本应用不在链接期依赖 libmpv，
+          # 而是运行时 dlopen（见 native/src/video.rs）。
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -139,11 +140,51 @@ jobs:
           # 没匹配到文件就直接失败，避免"构建绿了但没产物"一路带到发版
           if-no-files-found: error
 
+  # 在 Ubuntu 22.04 容器里真实安装一次。
+  #
+  # 为什么需要这个 job：deb 是在 24.04（GTK 4.14 / libadwaita 1.5）上构建的，
+  # 如果依赖元数据或代码里用了新版本才有的东西，用户在 22.04（GTK 4.6 /
+  # libadwaita 1.1）上装就会失败 —— 而且 build 阶段完全看不出来。
+  # 这里用最老的受支持发行版做守门，把这类问题挡在发版前。
+  verify-oldest:
+    needs: [build-linux]
+    runs-on: ubuntu-24.04
+    container: ubuntu:22.04
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: purr-pause-linux
+          path: deb
+
+      - name: Install on Ubuntu 22.04
+        run: |
+          set -eux
+          apt-get update
+          apt-get install -y --no-install-recommends ./deb/purr-pause-linux_*.deb
+
+          echo "--- 已安装版本 ---"
+          dpkg -s purr-pause-linux | sed -n '1,10p'
+
+          echo "--- 动态库解析检查 ---"
+          bin="$(command -v purr-pause-linux)"
+          ldd "$bin" > /tmp/ldd.txt 2>&1 || true
+          cat /tmp/ldd.txt
+          # NEEDED 里有解析不到的库时，ldd 会打印 "not found"
+          if grep -q "not found" /tmp/ldd.txt; then
+            echo "::error::二进制的动态库依赖在 Ubuntu 22.04 上无法满足"
+            exit 1
+          fi
+
+          echo "--- 关键运行时依赖的版本 ---"
+          dpkg -s libgtk-4-1 libadwaita-1-0 | grep -E '^(Package|Version)'
+
+          echo "✓ 在 Ubuntu 22.04 上安装并解析成功"
+
   # 仅打 v* tag 时运行，产出 GitHub Release 并附上 deb。
   # 保留 if 判断是因为手动触发（workflow_dispatch）时 github.ref 不是 tag，
   # 那种情况下只会产出 artifact，不会误发 Release。
   release:
-    needs: [build-linux]
+    needs: [build-linux, verify-oldest]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-24.04
     permissions:

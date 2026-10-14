@@ -28,9 +28,20 @@
 
 ```bash
 sudo dpkg -i purr-pause-linux_1.0.0_amd64.deb
+sudo apt-get -f install   # 若有依赖未装，用它补齐
 ```
 
-依赖：`libgtk-4-1`、`libadwaita-1-0`、`libmpv2`（安装时会自动检查）
+**系统要求**：GTK **4.6** 及以上、libadwaita **1.1** 及以上
+
+| 发行版 | 自带版本 | 是否支持 |
+|---|---|---|
+| Ubuntu 22.04 LTS | GTK 4.6 / libadwaita 1.1 | ✅ |
+| Debian 12 (bookworm) | GTK 4.8 / libadwaita 1.2 | ✅ |
+| Ubuntu 24.04 LTS | GTK 4.14 / libadwaita 1.5 | ✅ |
+| Debian 11、Ubuntu 20.04 | GTK 4.0 以下 / 无 GTK4 | ❌ |
+
+依赖：`libgtk-4-1`、`libadwaita-1-0`、`libmpv2` **或** `libmpv1`
+（安装时由包管理器自动检查与补齐；libmpv 在运行时动态加载，两代都可用）
 
 > **GNOME 用户注意**：GNOME 默认不提供系统托盘宿主，需安装扩展：
 > ```bash
@@ -41,9 +52,9 @@ sudo dpkg -i purr-pause-linux_1.0.0_amd64.deb
 ### 从源码构建
 
 ```bash
-# Debian / Ubuntu 构建依赖
+# Debian / Ubuntu 构建依赖（注意：不需要 libmpv-dev，本应用运行时才加载 libmpv）
 sudo apt install build-essential pkg-config libgtk-4-dev libadwaita-1-dev \
-libmpv-dev libssl-dev dpkg-dev imagemagick desktop-file-utils
+  libssl-dev dpkg-dev imagemagick desktop-file-utils
 
 cd native
 ./build-deb.sh
@@ -190,7 +201,7 @@ purr-pause-linux/
 │       ├── core/            # 配置 / 空闲检测 / 日志 / 开机自启
 │       ├── message/         # 待办轮询与差集检测
 │       ├── ui/              # 覆盖层 / 设置 / 激活 / 待办列表 / 托盘
-│       └── video.rs         # libmpv 视频解码（Cairo backend）
+│       └── video.rs         # libmpv 解码 + 渲染到 GtkGLArea（运行时 dlopen libmpv）
 ├── tools/
 │   ├── keygen.js            # 序列号生成器（含私钥，已 gitignore，需从私有备份恢复）
 │   ├── sig-fixtures/        # 跨语言签名等价性回归测试
@@ -198,14 +209,15 @@ purr-pause-linux/
 ├── docs/
 │   └── message-api-spec.md  # 第三方待办接口对接规范
 └── .github/workflows/
-    └── build-native.yml     # CI：Ubuntu 24.04 构建 deb 并发布 Release
+    └── build-native.yml     # CI：24.04 构建 deb、22.04 容器内验证安装、打 tag 发 Release
 ```
 
 ## 技术栈
 
-- GTK4 / libadwaita —— 窗口与控件
+- GTK4 / libadwaita —— 窗口与控件（最低 4.6 / 1.1，代码中不使用更高版本才有的 API）
 - Rust —— 业务逻辑
-- libmpv —— webm（VP9 + Alpha）解码，经 Cairo backend 直接绘制
+- libmpv —— webm（VP9 + Alpha）解码，经 render API 渲染进 GtkGLArea；
+  运行时 dlopen（`libmpv.so.2` → `libmpv.so.1`），不绑定具体版本
 - reqwest —— 第三方待办接口轮询
 - ed25519-dalek —— 序列号签名验证
 - AppIndicator —— 系统托盘

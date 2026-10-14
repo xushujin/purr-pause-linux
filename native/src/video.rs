@@ -1,21 +1,24 @@
 //! libmpv 封装：把 webm（VP9 + Alpha）解码后渲染到 GTK 的 GL 区域。
 //!
-//! ## 为什么不用 `mpv` crate 的 `build_with_gl()`
+//! ## 为什么完全不用 `mpv` crate
 //!
-//! `mpv` crate 0.2.3 的 GL 路径基于 **opengl-cb** 子系统
-//! （`mpv_opengl_cb_init_gl` / `mpv_opengl_cb_draw` / `mpv_get_sub_api` 等）。
-//! 该子系统在 **mpv 0.35 已被移除**，Ubuntu 24.04 提供的是 mpv 0.37，
-//! 其 `libmpv.so.2` 里这些符号**全部不存在**（可用 `nm -D` 核实），
-//! 因此 `build_with_gl()` 会直接**链接失败**：
-//! `undefined reference to 'mpv_opengl_cb_init_gl'`。
+//! `mpv` crate 0.2.3 有两个致命问题：
 //!
-//! 现在改用官方**仍在维护**的 render API（`mpv_render_context_*`，
-//! 见 `/usr/include/mpv/render.h` 与 `render_gl.h`），
-//! 这部分符号在 libmpv 0.37 中存在：
-//!   mpv_render_context_create / _render / _free / _set_update_callback
+//! 1. 它的 GL 路径基于 **opengl-cb** 子系统（`mpv_opengl_cb_init_gl` /
+//!    `mpv_get_sub_api` 等），而该子系统在 **mpv 0.35 已被移除**。
+//!    在现代 libmpv 上 `build_with_gl()` 会直接链接失败。
+//!    → 所以改用官方仍在维护的 render API（`mpv_render_context_*`）。
 //!
-//! 控制面（command / set_property / get_property / wait_event）仍用 `mpv` crate，
-//! 那些符号（`mpv_create` / `mpv_command` …）未被移除，可正常使用。
+//! 2. 它的 `mpv_gen.rs` 里带 `#[link(name = "mpv")] extern "C" { … }`，
+//!    **只要用到这个 crate，二进制就会记录 NEEDED = libmpv.so.2**。
+//!    Ubuntu 22.04 / Debian 12 提供的是 **libmpv.so.1**（mpv 0.34），
+//!    于是包在这些系统上根本起不来。
+//!    → 所以控制面（command / property / event）也一并自写 FFI，
+//!      并改为**运行时 dlopen**：依次尝试 libmpv.so.2 → libmpv.so.1 → libmpv.so。
+//!
+//! 两条 render API 与 client API 的 ABI 都以 `/usr/include/mpv/{client,render}.h`
+//! 为准逐字段核对过；两代 libmpv 的渲染 ABI 由上游保证兼容（同一个
+//! `MPV_RENDER_API_TYPE_OPENGL` 结构体），因此同一份代码对 0.34 / 0.37 都成立。
 //!
 //! ## GL 函数解析为什么自己 dlopen
 //!
@@ -27,7 +30,7 @@
 //!   - 兜底：直接 dlsym libGL / libGLESv2 导出的核心入口
 //! 三个库句柄一并保存在 `GlLibraries` 里，作为 `get_proc_address` 的 ctx。
 
-use std::ffi::CStr;
+use std::ffi::{CStr, CString};
 use std::os::raw::{c_char, c_int, c_void};
 use std::path::Path;
 use std::ptr;
@@ -36,10 +39,33 @@ use std::sync::OnceLock;
 
 use gtk::glib;
 use gtk::prelude::*;
-use mpv::{MpvHandler, MpvHandlerBuilder};
 
 // ---------------------------------------------------------------------------
-// libmpv render API 的 FFI 绑定（对应 /usr/include/mpv/render.h + render_gl.h）
+// mpv client API 的常量与结构（对照 /usr/include/mpv/client.h 核对）
+// ---------------------------------------------------------------------------
+
+/// `mpv_event_id`：无事件（`mpv_wait_event` 用 0 表示队列已空）
+const MPV_EVENT_NONE: c_int = 0;
+const MPV_EVENT_SHUTDOWN: c_int = 1;
+const MPV_EVENT_END_FILE: c_int = 7;
+
+/// `mpv_format`：`MPV_FORMAT_INT64`
+const MPV_FORMAT_INT64: c_int = 4;
+
+/// `typedef struct mpv_event { mpv_event_id event_id; int error;
+///                             uint64_t reply_userdata; void *data; }`
+///
+/// 只读 `event_id`，其余字段为保持布局一致而声明。
+#[repr(C)]
+struct MpvEvent {
+    event_id: c_int,
+    error: c_int,
+    reply_userdata: u64,
+    data: *mut c_void,
+}
+
+// ---------------------------------------------------------------------------
+// libmpv render API 的 FFI 类型（对应 /usr/include/mpv/render.h + render_gl.h）
 // ---------------------------------------------------------------------------
 
 /// `mpv_render_param_type`（render.h 中的枚举值，已核对头文件）
@@ -75,23 +101,127 @@ struct MpvOpenglFbo {
     internal_format: c_int,
 }
 
-// `mpv` crate 0.2.3 是纯 FFI 绑定，**没有 build.rs**，不会自动链接 libmpv；
-// 这里显式声明链接。同时下面这些 render API 函数由本模块自行声明
-// （crate 里没有封装 —— 它只有已被移除的 opengl-cb）。
-#[link(name = "mpv")]
-unsafe extern "C" {
-    fn mpv_render_context_create(
-        res: *mut *mut c_void,
-        mpv: *mut c_void,
-        params: *mut MpvRenderParam,
-    ) -> c_int;
-    fn mpv_render_context_render(ctx: *mut c_void, params: *mut MpvRenderParam) -> c_int;
-    fn mpv_render_context_set_update_callback(
-        ctx: *mut c_void,
-        callback: Option<unsafe extern "C" fn(*mut c_void)>,
-        callback_ctx: *mut c_void,
-    );
-    fn mpv_render_context_free(ctx: *mut c_void);
+// ---------------------------------------------------------------------------
+// 函数指针类型（全部对照官方头文件）
+// ---------------------------------------------------------------------------
+
+type MpvCreate = unsafe extern "C" fn() -> *mut c_void;
+type MpvInitialize = unsafe extern "C" fn(*mut c_void) -> c_int;
+type MpvTerminateDestroy = unsafe extern "C" fn(*mut c_void);
+type MpvSetOptionString = unsafe extern "C" fn(*mut c_void, *const c_char, *const c_char) -> c_int;
+type MpvSetPropertyString =
+    unsafe extern "C" fn(*mut c_void, *const c_char, *const c_char) -> c_int;
+type MpvGetProperty =
+    unsafe extern "C" fn(*mut c_void, *const c_char, c_int, *mut c_void) -> c_int;
+type MpvCommand = unsafe extern "C" fn(*mut c_void, *const *const c_char) -> c_int;
+type MpvWaitEvent = unsafe extern "C" fn(*mut c_void, f64) -> *const MpvEvent;
+type MpvErrorString = unsafe extern "C" fn(c_int) -> *const c_char;
+
+type MpvRenderContextCreate =
+    unsafe extern "C" fn(*mut *mut c_void, *mut c_void, *mut MpvRenderParam) -> c_int;
+type MpvRenderContextRender =
+    unsafe extern "C" fn(*mut c_void, *mut MpvRenderParam) -> c_int;
+type MpvRenderContextFree = unsafe extern "C" fn(*mut c_void);
+type MpvRenderContextSetUpdateCallback = unsafe extern "C" fn(
+    *mut c_void,
+    Option<unsafe extern "C" fn(*mut c_void)>,
+    *mut c_void,
+);
+
+/// 一次 dlopen 解析出来的全部 libmpv 入口。
+///
+/// `_lib` 必须活到进程结束 —— 下面所有函数指针都指向它。
+struct MpvApi {
+    _lib: libloading::Library,
+    create: MpvCreate,
+    initialize: MpvInitialize,
+    terminate_destroy: MpvTerminateDestroy,
+    set_option_string: MpvSetOptionString,
+    set_property_string: MpvSetPropertyString,
+    get_property: MpvGetProperty,
+    command: MpvCommand,
+    wait_event: MpvWaitEvent,
+    error_string: MpvErrorString,
+    render_context_create: MpvRenderContextCreate,
+    render_context_render: MpvRenderContextRender,
+    render_context_free: MpvRenderContextFree,
+    render_context_set_update_callback: MpvRenderContextSetUpdateCallback,
+}
+
+/// 缓存加载结果（含失败），避免每次创建播放器都重复 dlopen。
+static MPV_API: OnceLock<Result<&'static MpvApi, String>> = OnceLock::new();
+
+/// 取一个函数符号。`get::<T>()` 返回 `Symbol<'_, T>`，解引用即得函数指针。
+///
+/// ⚠️ 不能写成 `get::<Symbol<...>>`（双重包装），那样两个分支类型不一致。
+unsafe fn need<T: Copy>(lib: &libloading::Library, name: &[u8]) -> Result<T, String> {
+    unsafe { lib.get::<T>(name) }
+        .map(|s| *s)
+        .map_err(|e| {
+            let n = String::from_utf8_lossy(name).trim_end_matches('\0').to_string();
+            format!("缺少符号 {n}：{e}")
+        })
+}
+
+fn load_mpv_api() -> Result<&'static MpvApi, String> {
+    // 顺序很重要：24.04+ 是 .so.2，22.04 / Debian 12 是 .so.1。
+    // `libmpv.so` 只在装了 -dev 时存在，放最后作为兜底。
+    let candidates = ["libmpv.so.2", "libmpv.so.1", "libmpv.so"];
+    let mut last_err = String::from("未尝试任何候选库");
+
+    for name in candidates {
+        let lib = match unsafe { libloading::Library::new(name) } {
+            Ok(l) => l,
+            Err(e) => {
+                last_err = format!("{name}：{e}");
+                continue;
+            }
+        };
+        // 先全部解析到局部变量，再整体构造 —— 否则 `lib` 已被借用又被移动
+        let resolved: Result<MpvApi, String> = (|| {
+            Ok(MpvApi {
+                create: unsafe { need(&lib, b"mpv_create\0")? },
+                initialize: unsafe { need(&lib, b"mpv_initialize\0")? },
+                terminate_destroy: unsafe { need(&lib, b"mpv_terminate_destroy\0")? },
+                set_option_string: unsafe { need(&lib, b"mpv_set_option_string\0")? },
+                set_property_string: unsafe { need(&lib, b"mpv_set_property_string\0")? },
+                get_property: unsafe { need(&lib, b"mpv_get_property\0")? },
+                command: unsafe { need(&lib, b"mpv_command\0")? },
+                wait_event: unsafe { need(&lib, b"mpv_wait_event\0")? },
+                error_string: unsafe { need(&lib, b"mpv_error_string\0")? },
+                render_context_create: unsafe { need(&lib, b"mpv_render_context_create\0")? },
+                render_context_render: unsafe { need(&lib, b"mpv_render_context_render\0")? },
+                render_context_free: unsafe { need(&lib, b"mpv_render_context_free\0")? },
+                render_context_set_update_callback: unsafe {
+                    need(&lib, b"mpv_render_context_set_update_callback\0")?
+                },
+                _lib: lib,
+            })
+        })();
+
+        match resolved {
+            Ok(api) => return Ok(Box::leak(Box::new(api))),
+            Err(e) => last_err = format!("{name}：{e}"),
+        }
+    }
+
+    Err(format!(
+        "无法加载 libmpv（{last_err}）。请安装 libmpv2（Ubuntu 24.04+）或 libmpv1（22.04 / Debian 12）。"
+    ))
+}
+
+fn mpv_api() -> Result<&'static MpvApi, String> {
+    MPV_API.get_or_init(load_mpv_api).clone()
+}
+
+/// 把 mpv 返回码翻译成可读信息（失败时退回错误码数字）。
+fn mpv_err(api: &MpvApi, rc: c_int) -> String {
+    let p = unsafe { (api.error_string)(rc) };
+    if p.is_null() {
+        return format!("错误码 {rc}");
+    }
+    let s = unsafe { CStr::from_ptr(p) }.to_string_lossy().to_string();
+    format!("{s}（{rc}）")
 }
 
 // ---------------------------------------------------------------------------
@@ -224,9 +354,11 @@ unsafe extern "C" fn on_mpv_update(ctx: *mut c_void) {
 
 /// 视频播放器。
 pub struct VideoPlayer {
-    /// 控制面（command / property / event）走 `mpv` crate
-    mpv: MpvHandler,
-    /// `mpv_render_context*`（不透明指针）
+    /// 已解析的 libmpv 入口（进程级共享）
+    api: &'static MpvApi,
+    /// `mpv_handle *`
+    handle: *mut c_void,
+    /// `mpv_render_context *`（不透明指针）
     render_ctx: *mut c_void,
     /// mpv 回调置位用。放在 Box 里以保证地址稳定（回调持有其裸指针）
     update_flag: Box<AtomicBool>,
@@ -241,15 +373,20 @@ impl VideoPlayer {
     /// 必须在 GL 上下文**已经建立且 current** 之后调用
     /// （即 GLArea 的 `render` 回调内），否则 render context 创建会失败。
     pub fn new(gl_area: &gtk::GLArea) -> Result<Self, String> {
+        let api = mpv_api()?;
         // 加载 GL 相关动态库；句柄随进程存活，作为 get_proc_address 的 ctx
         let gl_ctx = gl_libs()? as *const GlLibraries as *mut c_void;
 
-        let mut builder =
-            MpvHandlerBuilder::new().map_err(|e| format!("mpv 创建失败：{e:?}"))?;
+        // 1) 创建 handle（此时选项还没设，先不能发命令）
+        let handle = unsafe { (api.create)() };
+        if handle.is_null() {
+            return Err("mpv_create 返回空指针".to_string());
+        }
 
-        // `vo=libmpv` 是使用 render API 的前提（由 vo_libmpv.c 提供渲染后端）。
-        // 注意：个别选项名若不被当前 libmpv 支持，**不应**让整个播放器创建失败，
-        // 因此下面逐个容错处理。
+        // 2) initialize 之前逐个设置选项。
+        //    `vo=libmpv` 是使用 render API 的前提（由 vo_libmpv.c 提供渲染后端）。
+        //    个别选项名若不被当前 libmpv 支持，**不应**让整个播放器创建失败，
+        //    因此逐个容错处理。
         let opts: Vec<(&str, &str)> = vec![
             ("vo", "libmpv"),
             // 硬件解码不可用时自动回落到软解
@@ -268,17 +405,24 @@ impl VideoPlayer {
             ("video-timing-offset", "0"),
         ];
         for (k, v) in opts {
-            if let Err(e) = builder.set_option(k, v) {
-                eprintln!("[purr-pause-linux] mpv 选项 {k} 设置失败（已忽略）：{e:?}");
+            let (Ok(ck), Ok(cv)) = (CString::new(k), CString::new(v)) else {
+                continue;
+            };
+            let rc = unsafe { (api.set_option_string)(handle, ck.as_ptr(), cv.as_ptr()) };
+            if rc < 0 {
+                eprintln!(
+                    "[purr-pause-linux] mpv 选项 {k} 设置失败（已忽略）：{}",
+                    mpv_err(api, rc)
+                );
             }
         }
 
-        let mpv = builder
-            .build()
-            .map_err(|e| format!("mpv 初始化失败：{e:?}"))?;
-
-        // build() 之后才有可用的 handle
-        let handle = mpv.raw() as *mut c_void;
+        // 3) 初始化核心
+        let rc = unsafe { (api.initialize)(handle) };
+        if rc < 0 {
+            unsafe { (api.terminate_destroy)(handle) };
+            return Err(format!("mpv 初始化失败：{}", mpv_err(api, rc)));
+        }
 
         let mut init = MpvOpenglInitParams {
             get_proc_address: Some(get_proc_address),
@@ -312,16 +456,18 @@ impl VideoPlayer {
         ];
 
         let mut render_ctx: *mut c_void = ptr::null_mut();
-        let rc = unsafe { mpv_render_context_create(&mut render_ctx, handle, params.as_mut_ptr()) };
+        let rc = unsafe { (api.render_context_create)(&mut render_ctx, handle, params.as_mut_ptr()) };
         if rc < 0 || render_ctx.is_null() {
+            unsafe { (api.terminate_destroy)(handle) };
             return Err(format!(
-                "mpv render context 创建失败（错误码 {rc}）—— GL 上下文是否已 current？"
+                "mpv render context 创建失败（{}）—— GL 上下文是否已 current？",
+                mpv_err(api, rc)
             ));
         }
 
         let update_flag = Box::new(AtomicBool::new(false));
         unsafe {
-            mpv_render_context_set_update_callback(
+            (api.render_context_set_update_callback)(
                 render_ctx,
                 Some(on_mpv_update),
                 &*update_flag as *const AtomicBool as *mut c_void,
@@ -329,12 +475,66 @@ impl VideoPlayer {
         }
 
         Ok(Self {
-            mpv,
+            api,
+            handle,
             render_ctx,
             update_flag,
             gl_area: gl_area.downgrade(),
             loaded: String::new(),
         })
+    }
+
+    /// 发一条 mpv 命令（参数以 NULL 结尾）。
+    fn command(&self, args: &[&str]) -> Result<(), String> {
+        let cstrings: Vec<CString> = args
+            .iter()
+            .filter_map(|a| CString::new(*a).ok())
+            .collect();
+        if cstrings.len() != args.len() {
+            return Err("命令参数含非法字符".to_string());
+        }
+        let mut ptrs: Vec<*const c_char> = cstrings.iter().map(|c| c.as_ptr()).collect();
+        ptrs.push(ptr::null());
+
+        let rc = unsafe { (self.api.command)(self.handle, ptrs.as_ptr()) };
+        if rc < 0 {
+            Err(mpv_err(self.api, rc))
+        } else {
+            Ok(())
+        }
+    }
+
+    /// 设置字符串型属性（失败只记录，不向上传播 —— 这些都属于"尽力而为"）。
+    fn set_prop(&self, name: &str, value: &str) {
+        let (Ok(cn), Ok(cv)) = (CString::new(name), CString::new(value)) else {
+            return;
+        };
+        let rc = unsafe { (self.api.set_property_string)(self.handle, cn.as_ptr(), cv.as_ptr()) };
+        if rc < 0 {
+            eprintln!(
+                "[purr-pause-linux] mpv 属性 {name}={value} 设置失败：{}",
+                mpv_err(self.api, rc)
+            );
+        }
+    }
+
+    /// 读取 int64 型属性。
+    fn get_i64(&self, name: &str) -> Option<i64> {
+        let cn = CString::new(name).ok()?;
+        let mut v: i64 = 0;
+        let rc = unsafe {
+            (self.api.get_property)(
+                self.handle,
+                cn.as_ptr(),
+                MPV_FORMAT_INT64,
+                &mut v as *mut i64 as *mut c_void,
+            )
+        };
+        if rc < 0 {
+            None
+        } else {
+            Some(v)
+        }
     }
 
     /// 载入视频。重复载同一文件时从头播放。
@@ -349,42 +549,34 @@ impl VideoPlayer {
             return Ok(());
         }
         let url = format!("file://{p}");
-        self.mpv
-            .command(&["loadfile", &url, "replace"])
-            .map_err(|e| format!("loadfile 失败：{e:?}"))?;
+        self.command(&["loadfile", &url, "replace"])
+            .map_err(|e| format!("loadfile 失败：{e}"))?;
         self.loaded = p;
         Ok(())
     }
 
     pub fn play(&mut self) {
-        let _ = self.mpv.set_property("pause", false);
+        self.set_prop("pause", "no");
     }
 
     #[allow(dead_code)]
     pub fn pause(&mut self) {
-        let _ = self.mpv.set_property("pause", true);
+        self.set_prop("pause", "yes");
     }
 
     pub fn set_loop(&mut self, on: bool) {
-        let _ = self.mpv.set_property("loop-file", on);
+        // 字符串形式最省事：布尔属性接受 yes/no，loop-file 另接受 inf
+        self.set_prop("loop-file", if on { "inf" } else { "no" });
     }
 
     pub fn seek(&mut self, pos: f64) {
-        let _ = self.mpv.command(&["seek", &format!("{pos}"), "absolute"]);
+        let _ = self.command(&["seek", &format!("{pos}"), "absolute"]);
     }
 
     /// 视频宽高比（宽 / 高）。未就绪时返回 None。
     pub fn aspect(&self) -> Option<f64> {
-        let w = self
-            .mpv
-            .get_property::<i64>("width")
-            .ok()
-            .filter(|v| *v > 0)? as f64;
-        let h = self
-            .mpv
-            .get_property::<i64>("height")
-            .ok()
-            .filter(|v| *v > 0)? as f64;
+        let w = self.get_i64("width").filter(|v| *v > 0)? as f64;
+        let h = self.get_i64("height").filter(|v| *v > 0)? as f64;
         Some(w / h)
     }
 
@@ -393,10 +585,18 @@ impl VideoPlayer {
     /// 返回 true 表示当前文件已播放完毕（EOF）或 mpv 已关闭。
     pub fn pump_events(&mut self) -> bool {
         let mut ended = false;
-        while let Some(event) = self.mpv.wait_event(0.0) {
-            match event {
-                mpv::Event::EndFile(_) | mpv::Event::Shutdown => ended = true,
-                _ => {}
+        loop {
+            let ev = unsafe { (self.api.wait_event)(self.handle, 0.0) };
+            if ev.is_null() {
+                break;
+            }
+            let id = unsafe { (*ev).event_id };
+            // MPV_EVENT_NONE 表示队列已空
+            if id == MPV_EVENT_NONE {
+                break;
+            }
+            if id == MPV_EVENT_END_FILE || id == MPV_EVENT_SHUTDOWN {
+                ended = true;
             }
         }
         ended
@@ -410,7 +610,7 @@ impl VideoPlayer {
     /// 是否有新帧可渲染。
     #[allow(dead_code)]
     pub fn has_frame(&self) -> bool {
-        self.mpv.get_property::<i64>("width").unwrap_or(0) > 0
+        self.get_i64("width").unwrap_or(0) > 0
     }
 
     /// 把当前帧渲染到当前绑定的帧缓冲。
@@ -442,7 +642,7 @@ impl VideoPlayer {
             },
         ];
         unsafe {
-            let _ = mpv_render_context_render(self.render_ctx, params.as_mut_ptr());
+            let _ = (self.api.render_context_render)(self.render_ctx, params.as_mut_ptr());
         }
     }
 
@@ -450,6 +650,7 @@ impl VideoPlayer {
     ///
     /// 应在 GL 上下文仍可用时调用（GLArea 的 `unrealize`），
     /// 以便 mpv 正常释放它创建的 GL 资源。
+    /// 注意顺序：必须先释放 render context，再销毁 mpv handle。
     pub fn shutdown(&mut self) {
         if self.render_ctx.is_null() {
             return;
@@ -459,7 +660,7 @@ impl VideoPlayer {
             area.make_current();
         }
         unsafe {
-            mpv_render_context_free(self.render_ctx);
+            (self.api.render_context_free)(self.render_ctx);
         }
         self.render_ctx = ptr::null_mut();
     }
@@ -469,6 +670,12 @@ impl Drop for VideoPlayer {
     fn drop(&mut self) {
         // 若 unrealize 已调用过 shutdown，这里是空操作
         self.shutdown();
-        let _ = self.mpv.command(&["quit"]);
+        if self.handle.is_null() {
+            return;
+        }
+        let _ = self.command(&["quit"]);
+        // 与 mpv crate 的 MpvHandler::drop 行为一致
+        unsafe { (self.api.terminate_destroy)(self.handle) };
+        self.handle = ptr::null_mut();
     }
 }

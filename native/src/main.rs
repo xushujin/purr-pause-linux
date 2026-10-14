@@ -9,7 +9,8 @@
 //!
 //! 技术要点：
 //!   - 空闲检测直接走 gdbus，无需探测外部命令是否存在
-//!   - 动画通过 libmpv 的 Cairo backend 绘制，无需 OpenGL 上下文
+//!   - 动画经 libmpv render API 渲染到 GtkGLArea（OpenGL，保留 alpha）；
+//!     libmpv 在运行时 dlopen，兼容 libmpv.so.2 / libmpv.so.1
 
 mod core;
 mod license;

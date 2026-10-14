@@ -10,9 +10,16 @@ name = "purr-pause-linux"
 path = "src/main.rs"
 
 [dependencies]
-gtk = { version = "0.11", package = "gtk4", features = ["v4_10"] }
-adw = { version = "0.9", package = "libadwaita", features = ["v1_5"] }
-mpv = "0.2"
+# ⚠️ feature 门槛 = 最低支持的 GTK / libadwaita 版本，**不要随意调高**：
+#   v4_6 → Ubuntu 22.04 (GTK 4.6)、Debian 12 (4.8)
+#   v1_1 → Ubuntu 22.04 (libadwaita 1.1)、Debian 12 (1.2)
+# 代码里已不再使用任何 4.10+ 的 API（原先的 UriLauncher / FileDialog 已替换），
+# 调高会直接让包在 22.04 上装不上。
+gtk = { version = "0.11", package = "gtk4", features = ["v4_6"] }
+adw = { version = "0.9", package = "libadwaita", features = ["v1_1"] }
+# 不再依赖 mpv crate：它带 #[link(name = "mpv")]，会把二进制绑死到
+# libmpv.so.2（Ubuntu 24.04），而 22.04 只有 libmpv.so.1。
+# 现在改为运行时 dlopen（见 src/video.rs），两个版本都能用。
 libloading = "0.9"
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls", "rustls-native-certs", "http2"] }
 ed25519-dalek = "2"
