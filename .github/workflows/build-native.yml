@@ -71,11 +71,43 @@ jobs:
           # 注意：**不装 libmpv-dev** —— 本应用不在链接期依赖 libmpv，
           # 而是运行时 dlopen（见 native/src/video.rs）。
 
+      # 断言构建环境就是最老的目标发行版（22.04 / glibc 2.35）。
+      #
+      # 为什么值得单独一步：glibc 会渗透进构建产物的每个角落。
+      # 实测踩过：rust-cache 的默认 key 只含 runner.os（“Linux”），**不含发行版版本**，
+      # 于是 24.04 上缓存下来的 target/ 被恢复进了 22.04 的 job ——
+      # 里面 aws-lc-sys 的 .o 是用 2.39 的头文件编的（引用 __isoc23_strtol），
+      # 在 22.04 上直接 `undefined symbol: __isoc23_strtol` 链接失败。
+      # 下面这个断言 + rust-cache 的显式 key 一起，把这类问题挡在开头。
+      - name: 断言构建环境基线
+        run: |
+          set -euo pipefail
+          echo "--- 构建环境 ---"
+          grep -E '^(PRETTY_NAME|VERSION_ID)=' /etc/os-release
+          gcc --version | head -1
+          ldd --version | head -1
+          # rustc 此时可能尚未安装（由后面的 dtolnay/rust-toolchain 提供），仅记录
+          rustc -V 2>/dev/null || echo "rustc: 尚未安装（稍后由 dtolnay/rust-toolchain 安装）"
+
+          glibc_ver="$(ldd --version | head -1 | grep -oE '[0-9]+\.[0-9]+$')"
+          echo "glibc = $glibc_ver （期望 2.35）"
+          if [ "$glibc_ver" != "2.35" ]; then
+            echo "::error::构建机 glibc 是 $glibc_ver，期望 2.35。构建机必须是最老的目标发行版 ubuntu-22.04，否则产物在 22.04 上会因 glibc 符号版本缺失而起不来。"
+            exit 1
+          fi
+
       - uses: dtolnay/rust-toolchain@stable
 
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: native
+          # ⚠️ 这个 key 不能删。rust-cache 的默认缓存键只含 runner.os（“Linux”）、
+          # rustc 版本和 Cargo.lock 哈希，**不含发行版版本** —— 于是
+          # ubuntu-24.04 上缓存的 target/ 会被恢复进 ubuntu-22.04 的 job。
+          # 那些 .o/.rlib 是用 glibc 2.39 的头文件编的（引用 __isoc23_strtol），
+          # 在 22.04 上链接必然失败：`undefined symbol: __isoc23_strtol`。
+          # 把构建环境写进 key，保证缓存与构建机版本严格对应。
+          key: ubuntu-22.04
 
       # 序列号一致性校验。
       # fixtures.json 含私钥 seed，已 gitignore，因此公开仓库的 CI 跑的是
