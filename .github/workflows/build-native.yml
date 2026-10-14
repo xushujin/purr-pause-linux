@@ -26,8 +26,20 @@ on:
 # 注意 upload-artifact 的 v5 与 download-artifact 的 v6 名义上是新大版本，
 # 实际仍是 node20 —— 只有 v6+/v7+ 才切到 node24。
 jobs:
+  # ⚠️ 构建机必须是**最老的目标发行版**（22.04），不要改回 ubuntu-24.04。
+  #
+  # 原因一（硬性的）：glibc 符号版本只向下兼容 —— 老系统构建的产物能在新系统跑，
+  #   反过来不行。在 24.04（glibc 2.39）上构建，二进制会带上 GLIBC_2.38 需求，
+  #   22.04（glibc 2.35）上直接 `version 'GLIBC_2.38' not found` 起不来。
+  #   这条与代码无关，改 Cargo.toml 也修不好，唯一解是换更老的构建环境。
+  # 原因二：22.04 的 GTK 头文件是 4.6，与 features=["v4_6"] 天然一致，
+  #   不会出现"编译期瞄到新符号、运行时才发现缺失"的情况。
+  #
+  # 代价：ubuntu-22.04 runner 迟早会被 GitHub 退役。届时**不能**简单换成
+  #   ubuntu-24.04，而应改用 container: ubuntu:22.04（或在 24.04 上用
+  #   docker run 跑 22.04 容器）。下方的「glibc 符号版本下限」步骤就是守卫。
   build-linux:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v7
 
@@ -89,9 +101,9 @@ jobs:
           echo "产物: $DEB"
 
           # 1) ar 成员名必须是标准名（dpkg 只认这些；带前导点的名字会被拒装）。
-          #    注意压缩后缀是**变的**：Ubuntu 24.04 的 dpkg 默认用 zstd，
+          #    注意压缩后缀是**变的**：Ubuntu 21.10 起 dpkg 默认用 zstd，
           #    产出 control.tar.zst / data.tar.zst；build-deb.sh 的 ar 回退
-          #    路径（无 dpkg-deb 时）产出 .tar.gz。所以这里不能硬编码后缀。
+          #    路径（无 dpkg-deb 时，如 macOS）产出 .tar.gz。这里不能硬编码后缀。
           members="$(ar t "$DEB")"
           echo "--- ar 成员 ---"
           echo "$members"
@@ -132,6 +144,38 @@ jobs:
 
           echo "deb 结构校验通过"
 
+      # 守卫：二进制的 glibc 符号版本需求不得超过最老的目标发行版。
+      #
+      # 这条检查是为了让「构建环境太新」这件事**在 CI 里当场暴露**，
+      # 而不是等用户装到旧系统上才发现（glibc 符号缺失时程序连 main 都到不了）。
+      # 22.04 = glibc 2.35。若换了构建环境，这里会立刻红。
+      - name: 检查 glibc 符号版本下限
+        working-directory: native
+        run: |
+          set -euo pipefail
+          tmp="$(mktemp -d)"
+          dpkg-deb -x dist/purr-pause-linux_*.deb "$tmp"
+          bin="$tmp/usr/bin/purr-pause-linux"
+
+          vers="$(objdump -T "$bin" | grep -oE 'GLIBC_[0-9]+\.[0-9]+' | sort -uV || true)"
+          echo "--- 二进制依赖的 glibc 符号版本 ---"
+          echo "$vers"
+          # 任何真实二进制都至少引用 GLIBC_2.2.5；读不到说明守卫本身失效了，
+          # 这种"静默放行"比报错更危险，必须显式失败
+          if [ -z "$vers" ]; then
+            echo "::error::没能从二进制里读到 glibc 符号版本（objdump 失效？），此守卫未生效"
+            exit 1
+          fi
+          echo "最高：$(echo "$vers" | sed 's/GLIBC_//' | sort -V | tail -1)"
+
+          # 允许上限 2.35（Ubuntu 22.04）
+          too_new="$(echo "$vers" | sed 's/GLIBC_//' | awk -F. '$1>2 || ($1==2 && $2>35)' | sort -uV)"
+          if [ -n "$too_new" ]; then
+            echo "::error::二进制需要 glibc $(echo "$too_new" | tr '\n' ' ')（超过 22.04 的 2.35）。构建环境太新了，必须用 ubuntu-22.04 构建。"
+            exit 1
+          fi
+          echo "✓ 未超过 glibc 2.35"
+
       - name: Upload artifact
         uses: actions/upload-artifact@v7
         with:
@@ -140,12 +184,14 @@ jobs:
           # 没匹配到文件就直接失败，避免"构建绿了但没产物"一路带到发版
           if-no-files-found: error
 
-  # 在 Ubuntu 22.04 容器里真实安装一次。
+  # 在**干净**的 Ubuntu 22.04 容器里真实安装一次（无任何开发包）。
   #
-  # 为什么需要这个 job：deb 是在 24.04（GTK 4.14 / libadwaita 1.5）上构建的，
-  # 如果依赖元数据或代码里用了新版本才有的东西，用户在 22.04（GTK 4.6 /
-  # libadwaita 1.1）上装就会失败 —— 而且 build 阶段完全看不出来。
-  # 这里用最老的受支持发行版做守门，把这类问题挡在发版前。
+  # 为什么需要独立一个 job：
+  #   ① 干净环境才能验证 deb 的 Depends 是否写全 —— 构建机装了
+  #      libgtk-4-dev 等开发包，在它上面装包会被"顺手满足"，掩盖漏写的依赖。
+  #   ② 22.04 是最老的支持目标，它的 glibc / GTK / libadwaita 都是下限。
+  #   ③ libmpv 是**运行时 dlopen**，不在 NEEDED 里，ldd 查不到，
+  #      必须单独确认系统里确实有 libmpv.so.1 或 .so.2。
   verify-oldest:
     needs: [build-linux]
     runs-on: ubuntu-24.04
@@ -169,9 +215,19 @@ jobs:
           bin="$(command -v purr-pause-linux)"
           ldd "$bin" > /tmp/ldd.txt 2>&1 || true
           cat /tmp/ldd.txt
-          # NEEDED 里有解析不到的库时，ldd 会打印 "not found"
+          # 解析不到的库会显示 "not found"；glibc 符号版本缺失也会命中这一关键字
           if grep -q "not found" /tmp/ldd.txt; then
-            echo "::error::二进制的动态库依赖在 Ubuntu 22.04 上无法满足"
+            bad="$(grep "not found" /tmp/ldd.txt | head -5 | paste -sd' | ' -)"
+            echo "::error::动态库依赖无法满足：$bad"
+            exit 1
+          fi
+
+          echo "--- dlopen 目标 libmpv 是否存在 ---"
+          # 视频是运行时 dlopen libmpv，不在 NEEDED 里，所以单独查一次
+          if ldconfig -p | grep -qE 'libmpv\.so\.[12]'; then
+            ldconfig -p | grep -E 'libmpv\.so\.[12]'
+          else
+            echo "::error::系统里没有 libmpv.so.1 / libmpv.so.2，视频功能不可用（检查 Depends）"
             exit 1
           fi
 
@@ -180,11 +236,42 @@ jobs:
 
           echo "✓ 在 Ubuntu 22.04 上安装并解析成功"
 
+  # 同一份产物在最新的受支持发行版上也装一次。
+  # 22.04 构建的产物按理能向前兼容，但"按理"要验证 —— 多数用户在 24.04+。
+  # 直接装在 runner（本身就是 24.04）上，不用容器。
+  verify-newest:
+    needs: [build-linux]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: purr-pause-linux
+          path: deb
+
+      - name: Install on Ubuntu 24.04
+        run: |
+          set -eux
+          sudo apt-get update
+          sudo apt-get install -y ./deb/purr-pause-linux_*.deb
+
+          bin="$(command -v purr-pause-linux)"
+          ldd "$bin" > /tmp/ldd.txt 2>&1 || true
+          if grep -q "not found" /tmp/ldd.txt; then
+            bad="$(grep "not found" /tmp/ldd.txt | head -5 | paste -sd' | ' -)"
+            echo "::error::动态库依赖无法满足：$bad"
+            exit 1
+          fi
+
+          ldconfig -p | grep -E 'libmpv\.so\.[12]' || {
+            echo "::error::系统里没有 libmpv.so.1 / libmpv.so.2"; exit 1; }
+
+          echo "✓ 在 Ubuntu 24.04 上安装并解析成功"
+
   # 仅打 v* tag 时运行，产出 GitHub Release 并附上 deb。
   # 保留 if 判断是因为手动触发（workflow_dispatch）时 github.ref 不是 tag，
   # 那种情况下只会产出 artifact，不会误发 Release。
   release:
-    needs: [build-linux, verify-oldest]
+    needs: [build-linux, verify-oldest, verify-newest]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-24.04
     permissions:

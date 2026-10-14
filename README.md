@@ -51,6 +51,12 @@ sudo apt-get -f install   # 若有依赖未装，用它补齐
 
 ### 从源码构建
 
+> ⚠️ **构建机要用最老的目标发行版**（本项目是 Ubuntu 22.04）。
+> glibc 的符号版本只向下兼容：在 24.04（glibc 2.39）上构建的产物在
+> 22.04（glibc 2.35）上会直接以 `version 'GLIBC_2.38' not found` 启动失败，
+> **改代码无法解决，只能换构建环境**。CI 对此有守卫：打包后检查二进制的
+> glibc 符号版本不超过 2.35。
+
 ```bash
 # Debian / Ubuntu 构建依赖（注意：不需要 libmpv-dev，本应用运行时才加载 libmpv）
 sudo apt install build-essential pkg-config libgtk-4-dev libadwaita-1-dev \
