@@ -5,13 +5,26 @@
 use adw::prelude::*;
 // glib 是 gtk4 的依赖，须经 gtk 路径引入（Rust 2018 起不能用裸 crate 名）
 use gtk::glib;
+use std::cell::RefCell;
 
 use crate::license::{self, LicenseStatus};
+
+thread_local! {
+    /// 当前打开的激活窗口（强引用持有，理由同 settings.rs 的 OPEN_WIN）。
+    static OPEN_WIN: RefCell<Option<adw::Window>> = const { RefCell::new(None) };
+}
 
 pub fn present<F>(on_activated: F)
 where
     F: Fn() + 'static,
 {
+    // 已有激活窗口打开 → 前置聚焦，不再开第二个
+    // （startup 里授权过期会开一次，activate 里可能再调一次，靠这里去重）
+    if let Some(w) = OPEN_WIN.with(|s| s.borrow().clone()) {
+        w.present();
+        return;
+    }
+
     let window = adw::Window::builder()
         .title("激活 胖猫暂停一下（PurrPause Linux）")
         .modal(true)
@@ -147,6 +160,12 @@ where
 
     let win3 = window.clone();
     skip_btn.connect_clicked(move |_| win3.close());
+
+    // 存槽（强引用持有）+ 销毁清槽（同 settings.rs）
+    window.connect_destroy(|_| {
+        OPEN_WIN.with(|s| *s.borrow_mut() = None);
+    });
+    OPEN_WIN.with(|s| *s.borrow_mut() = Some(window.clone()));
 
     window.present();
 }

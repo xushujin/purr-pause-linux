@@ -17,6 +17,11 @@ use std::rc::Rc;
 use crate::message::{self, AggregatedState, TodoItem};
 use crate::AppState;
 
+thread_local! {
+    /// 当前打开的待办消息窗口（强引用持有，理由同 settings.rs 的 OPEN_WIN）。
+    static OPEN_WIN: RefCell<Option<adw::Window>> = const { RefCell::new(None) };
+}
+
 /// 来源调色板（与 JS 版一致）。
 const SOURCE_PALETTE: [&str; 6] = ["#2f80ed", "#27ae60", "#f2994a", "#9b51e0", "#eb5757", "#00a7a7"];
 
@@ -32,6 +37,11 @@ fn source_color(source_id: &str) -> &'static str {
 
 /// 打开待办消息窗口。state 用于点击后回写清理结果与角标。
 pub fn present(state_snapshot: AggregatedState, app_state: Rc<RefCell<AppState>>) {
+    // 窗口内容是本次的数据快照，不适合复用旧窗口 —— 先关掉旧的再建新的。
+    if let Some(old) = OPEN_WIN.with(|s| s.borrow_mut().take()) {
+        old.close();
+    }
+
     let window = adw::Window::builder()
         .title("待办消息")
         .default_width(560)
@@ -119,6 +129,12 @@ pub fn present(state_snapshot: AggregatedState, app_state: Rc<RefCell<AppState>>
         render_refresh(&snapshot);
         win_refresh.present();
     });
+
+    // 存槽（强引用持有）+ 销毁清槽（同 settings.rs）
+    window.connect_destroy(|_| {
+        OPEN_WIN.with(|s| *s.borrow_mut() = None);
+    });
+    OPEN_WIN.with(|s| *s.borrow_mut() = Some(window.clone()));
 
     window.present();
 }

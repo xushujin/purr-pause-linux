@@ -141,24 +141,28 @@ fn main() {
 
         // 供 activate 回调取用（见下方 connect_activate）
         STATE.with(|s| *s.borrow_mut() = Some(state.clone()));
+
+        // 应用常驻：GApplication 在 use_count 归零（无窗口、无 hold）时退出。
+        // ⚠️ 两个要点：
+        //   1. hold() 必须在注册之后调用 —— startup 信号正是在 register 之后、
+        //      activate 之前触发的，位置正确；原先写在 main 里 run() 之前，
+        //      属于「未注册就 hold」，行为不可靠。
+        //   2. guard 有意 forget：守护进程存活期间永不释放（退出走
+        //      设置窗口的「退出应用」按钮 / 未来的托盘菜单）。
+        //      若正常绑定到变量，main 返回时 guard 析构 = hold 白做。
+        std::mem::forget(_app.hold());
     });
 
-    // activate 在每次被激活时触发，包括「用户又启动了一次」。
+    // activate 在**每次**被激活时触发：首次启动，以及用户再次点击启动器。
     //
-    // 语义：
-    //   - 首次激活（紧随 startup 之后的那次）→ 什么都不做，静默进驻，
-    //     与 electron 版一致（启动时不弹任何窗口）。
-    //   - 之后的激活 = 用户想跟应用打交道 → 打开设置窗口。
-    //
-    // ⚠️ 这条入口是**托盘不可用时的兜底**。electron 版靠托盘菜单进入各窗口，
-    //    而 native 的托盘（D-Bus StatusNotifierItem）尚未实现，若不放这条入口，
-    //    用户装完之后没有任何办法打开设置/激活 —— 等于应用不可用。
-    //    托盘落地后这条可以保留（无害，且对无托盘的 GNOME 是唯一入口）。
-    let first_activate = Rc::new(std::cell::Cell::new(true));
+    // ⚠️ 这里必须弹窗，不能照搬 electron 版的「静默进驻」：
+    //    electron 启动后什么都不显示，是因为有托盘图标作为唯一入口；
+    //    而 native 的托盘（GTK3 AppIndicator）在 GTK4 下必然失败，
+    //    若这里也不弹窗，用户点开图标看到的就是「毫无反应、无任务栏图标」，
+    //    应用等于不可用 —— 这正是 v1.0.0 用户实测反馈的现象。
+    //    托盘（D-Bus StatusNotifierItem）落地后，可改成
+    //    「托盘可用 → 静默进驻；不可用 → 弹窗」。
     app.connect_activate(move |_app| {
-        if first_activate.replace(false) {
-            return;
-        }
         let Some(state) = STATE.with(|s| s.borrow().clone()) else {
             return;
         };
@@ -169,12 +173,6 @@ fn main() {
         }
     });
 
-    // 防止无窗口时应用立即退出。
-    //
-    // ⚠️ hold() 的返回值必须绑定到变量：ApplicationHoldGuard 一旦析构，
-    //    保护立刻失效。原先写在 activate 闭包里且未绑定，等于完全没生效
-    //    （闭包返回时 guard 就被丢弃了）。放在 main 作用域可存活至 run() 返回。
-    let _guard = app.hold();
     app.run();
 }
 

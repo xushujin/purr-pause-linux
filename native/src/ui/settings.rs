@@ -15,6 +15,15 @@ use std::rc::Rc;
 
 use crate::core::config::Config;
 
+thread_local! {
+    /// 当前打开的设置窗口。
+    ///
+    /// ⚠️ 必须强引用持有：present() 之后本函数返回、局部句柄析构，
+    /// 若无其他引用，窗口可能随之销毁（表现为看不到窗口 / 闪一下就没了）。
+    /// 同时用于单例：已打开时直接前置聚焦，不再开第二个。
+    static OPEN_WIN: RefCell<Option<adw::Window>> = const { RefCell::new(None) };
+}
+
 /// 打开设置窗口。回调在用户点击「保存」时触发。
 ///
 /// `_idle_method` 仅用于调用方保持接口稳定（该信息在启动时已写入日志）；
@@ -23,6 +32,12 @@ pub fn present<F>(current: Config, activated: bool, _idle_method: String, on_sav
 where
     F: Fn(Config) + 'static,
 {
+    // 已有设置窗口打开 → 提到前台即可（electron 版也是单窗口复用）
+    if let Some(w) = OPEN_WIN.with(|s| s.borrow().clone()) {
+        w.present();
+        return;
+    }
+
     let window = adw::Window::builder()
         .title("胖猫暂停一下（PurrPause） 设置")
         .modal(false)
@@ -36,6 +51,18 @@ where
     let cancel_btn = gtk::Button::with_label("取消");
     header.pack_start(&cancel_btn);
     header.pack_end(&save_btn);
+
+    // 「退出应用」：托盘（真正的退出入口，见 electron 版托盘菜单）落地前的
+    // 临时途径 —— 应用是常驻进程，没有托盘时用户没有任何办法退出。
+    let quit_btn = gtk::Button::with_label("退出应用");
+    quit_btn.add_css_class("destructive-action");
+    quit_btn.set_tooltip_text(Some("完全退出应用，停止后台的休息提醒"));
+    header.pack_start(&quit_btn);
+    quit_btn.connect_clicked(move |_| {
+        // 与托盘菜单的「退出」一致：直接结束进程。
+        std::process::exit(0);
+    });
+
     window.set_titlebar(Some(&header));
 
     let page = adw::PreferencesPage::new();
@@ -211,6 +238,13 @@ where
 
     let win3 = window.clone();
     cancel_btn.connect_clicked(move |_| win3.close());
+
+    // 存入槽（强引用持有）+ 销毁时清槽：
+    // 用户点标题栏 X / 取消 / 保存后窗口销毁，下次打开能拿到最新配置重建。
+    window.connect_destroy(|_| {
+        OPEN_WIN.with(|s| *s.borrow_mut() = None);
+    });
+    OPEN_WIN.with(|s| *s.borrow_mut() = Some(window.clone()));
 
     window.present();
 }
