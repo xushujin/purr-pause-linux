@@ -240,6 +240,9 @@ const FLIP_Y: c_int = 1;
 /// `GL_FRAMEBUFFER_BINDING`
 const GL_FRAMEBUFFER_BINDING: u32 = 0x8CA6;
 type GlGetIntegerv = unsafe extern "C" fn(u32, *mut c_int);
+type GlClearColor = unsafe extern "C" fn(f32, f32, f32, f32);
+type GlClear = unsafe extern "C" fn(u32);
+const GL_COLOR_BUFFER_BIT: u32 = 0x0000_4000;
 /// `glXGetProcAddressARB` / `eglGetProcAddress` 的形状相同
 type GetProcAddressFn = unsafe extern "C" fn(*const c_char) -> *mut c_void;
 
@@ -338,6 +341,28 @@ fn current_fbo() -> c_int {
         }
     }
     0
+}
+
+/// 把当前 FBO 清成透明黑 (0,0,0,0)。
+///
+/// mpv 渲染只覆盖视频区域，FBO 其余部分保留上一次的内容；
+/// 必须显式清成透明，空隙处透出的才是桌面而非黑块。
+fn clear_transparent() {
+    let Ok(libs) = gl_libs() else {
+        return;
+    };
+    for lib in [&libs.gl, &libs.gles].into_iter().flatten() {
+        if let (Ok(clear_color), Ok(clear)) = (
+            unsafe { lib.get::<GlClearColor>(b"glClearColor\0") },
+            unsafe { lib.get::<GlClear>(b"glClear\0") },
+        ) {
+            unsafe {
+                clear_color(0.0, 0.0, 0.0, 0.0);
+                clear(GL_COLOR_BUFFER_BIT);
+            }
+            return;
+        }
+    }
 }
 
 /// mpv 的「有新帧可渲染」回调。
@@ -627,6 +652,9 @@ impl VideoPlayer {
             internal_format: 0,
         };
         let mut flip_y: c_int = FLIP_Y;
+        // 先把 FBO 清成透明黑：mpv 只覆盖视频区域（宽高比不同时四周留空），
+        // 不清的话残留内容会以黑块呈现。
+        clear_transparent();
         let mut params = [
             MpvRenderParam {
                 type_: MPV_RENDER_PARAM_OPENGL_FBO,

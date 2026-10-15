@@ -96,6 +96,11 @@ impl CatOverlay {
             .resizable(false)
             .deletable(false)
             .build();
+        // ⚠️ GTK4 窗口默认绘制主题的**不透明**背景 —— 全屏盖下来就是
+        //    「黑屏」（实测 v1.0.0 现象）。必须用 CSS 把背景设为透明，
+        //    mpv 渲染的 alpha 内容才能透出桌面。
+        window.add_css_class("cat-overlay");
+        load_overlay_css();
         // 注意：GTK4 删除了 gtk_window_set_keep_above，没有 set_keep_above。
         // 置顶由 fullscreen() 承担；真正常驻置顶需 gtk4-layer-shell（另开任务）。
         window.set_focusable(false);
@@ -457,4 +462,26 @@ fn apply_geometry(ctx: &Ctx, _win_w: f64, _win_h: f64) {
     let cx = (x - w as f64 / 2.0).max(0.0);
     let cy = (y - h as f64 / 2.0).max(0.0);
     ctx.frame.put(&ctx.gl_area, cx, cy);
+}
+
+/// 覆盖层专用 CSS：窗口背景透明。全局只加载一次。
+///
+/// 只动窗口本身的背景 —— 里面的倒计时文字与按钮保持主题样式。
+/// GTK4 没有 gtk_window_set_visual 这类 API，透明即「CSS 背景透明 +
+/// 合成器提供 ARGB surface」，X11/Wayland 下均成立。
+fn load_overlay_css() {
+    static LOADED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+    if LOADED.get().is_some() {
+        return;
+    }
+    let css = gtk::CssProvider::new();
+    css.load_from_data("window.cat-overlay { background-color: transparent; }");
+    if let Some(display) = gtk::gdk::Display::default() {
+        gtk::style_context_add_provider_for_display(
+            &display,
+            &css,
+            gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
+        );
+    }
+    let _ = LOADED.set(());
 }

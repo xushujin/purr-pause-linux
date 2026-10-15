@@ -906,8 +906,16 @@ fn open_settings(state: &Rc<RefCell<AppState>>) {
         let log_enabled = new_cfg.log_enabled;
         s.config = new_cfg.clone();
         s.log.set_enabled(log_enabled);
-        let _ = config::save(&new_cfg);
-        s.log.info("配置已保存");
+        if let Err(e) = config::save(&new_cfg) {
+            let msg = format!("配置写入 {} 失败：{e}", config::user_config_path().display());
+            eprintln!("[purr-pause-linux] {msg}");
+            s.log.error(&msg);
+        } else {
+            s.log.info(&format!(
+                "配置已保存至 {}",
+                config::user_config_path().display()
+            ));
+        }
         drop(s);
         refresh_tray(&st);
     });
