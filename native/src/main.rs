@@ -60,6 +60,15 @@ pub struct AppState {
 }
 
 fn main() {
+    // 排查「启动无反应/秒退」专用：PURR_DEBUG=1 时把关键里程碑打到 stderr。
+    // GUI 应用默认零输出，一旦出问题（秒退/无窗口）毫无线索；
+    // 有了这条轨迹 + 退出码，一次实测即可定位死在哪一步。
+    dbg_trace(&format!(
+        "启动 v{} (pid {})",
+        env!("CARGO_PKG_VERSION"),
+        std::process::id()
+    ));
+
     let app = adw::Application::builder()
         .application_id(APP_ID)
         // 不设 NON_UNIQUE：GApplication 默认借助 D-Bus well-known name 保证单实例。
@@ -75,7 +84,8 @@ fn main() {
     // GApplication 在**每次**被激活时都会发 activate —— 包括第二个实例通过
     // D-Bus 转发过来的激活。原先整段初始化写在 activate 里，导致用户再点一次
     // 图标就会把一切重来一遍：重复的计时器、重复的消息轮询、重复的托盘。
-    app.connect_startup(|_app| {
+    app.connect_startup(move |_app| {
+        dbg_trace("startup：开始初始化");
         let data_dir = config::data_dir();
         let _ = std::fs::create_dir_all(&data_dir);
         let log_dir = data_dir.join("logs");
@@ -151,6 +161,13 @@ fn main() {
         //      设置窗口的「退出应用」按钮 / 未来的托盘菜单）。
         //      若正常绑定到变量，main 返回时 guard 析构 = hold 白做。
         std::mem::forget(_app.hold());
+
+        let tray_state = if TRAY.with(|t| t.borrow().is_some()) {
+            "托盘已创建"
+        } else {
+            "托盘不可用（已降级，无托盘图标）"
+        };
+        dbg_trace(&format!("startup：初始化完成（{tray_state}），已 hold 常驻"));
     });
 
     // activate 在**每次**被激活时触发：首次启动，以及用户再次点击启动器。
@@ -163,17 +180,35 @@ fn main() {
     //    托盘（D-Bus StatusNotifierItem）落地后，可改成
     //    「托盘可用 → 静默进驻；不可用 → 弹窗」。
     app.connect_activate(move |_app| {
+        dbg_trace("activate：收到激活请求（打开窗口）");
         let Some(state) = STATE.with(|s| s.borrow().clone()) else {
+            dbg_trace("activate：⚠️ STATE 未初始化（startup 未跑过？），忽略");
             return;
         };
         if license::check_status().status == LicenseStatus::Expired {
+            dbg_trace("activate：授权过期 → 打开激活窗口");
             show_activation(&state);
         } else {
+            dbg_trace("activate：打开设置窗口");
             open_settings(&state);
         }
     });
 
-    app.run();
+    let code = app.run();
+    dbg_trace(&format!(
+        "⚠️ 主循环已退出（exit={code:?}）——正常情况下守护进程不应走到这里"
+    ));
+}
+
+/// 排查用轨迹：设 `PURR_DEBUG=1` 时把关键里程碑打到 stderr。
+///
+/// GUI 应用默认零输出，一旦「秒退/无窗口」毫无线索；
+/// `PURR_DEBUG=1 purr-pause-linux; echo $?` 一次实测即可定位死在哪一步、
+/// 以及退出码含义（0=正常退出 / 139=段错误 / 134=abort）。
+fn dbg_trace(msg: &str) {
+    if std::env::var_os("PURR_DEBUG").is_some() {
+        eprintln!("[purr-pause-linux] {msg}");
+    }
 }
 
 /// 写入日志。
