@@ -52,7 +52,8 @@ pub fn present(state_snapshot: AggregatedState, app_state: Rc<RefCell<AppState>>
     let refresh_btn = gtk::Button::from_icon_name("view-refresh-symbolic");
     refresh_btn.set_tooltip_text(Some("刷新"));
     header.pack_end(&refresh_btn);
-    window.set_titlebar(Some(&header));
+    // ⚠️ 不能调 window.set_titlebar()：AdwWindow 不支持，libadwaita 会直接
+    //    Adwaita-ERROR abort（同 settings.rs 的说明）。HeaderBar 放进内容顶部。
 
     let outer = gtk::Box::new(gtk::Orientation::Vertical, 0);
 
@@ -77,7 +78,12 @@ pub fn present(state_snapshot: AggregatedState, app_state: Rc<RefCell<AppState>>
     scroller.set_child(Some(&list));
     outer.append(&scroller);
 
-    window.set_child(Some(&outer));
+    // AdwWindow 不支持 set_titlebar —— HeaderBar 放进内容顶部（见上方注释）
+    outer.set_vexpand(true);
+    let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    root.append(&header);
+    root.append(&outer);
+    window.set_content(Some(&root));
 
     // render 闭包会 move 走 app_state / window，
     // 因此先各克隆一份给它用，外层继续持有原件（否则后面 refresh 用到已移动的值）。

@@ -63,8 +63,6 @@ where
         std::process::exit(0);
     });
 
-    window.set_titlebar(Some(&header));
-
     let page = adw::PreferencesPage::new();
     // electron 版是一张无标题卡片，6 行依次排列
     let group = adw::PreferencesGroup::new();
@@ -205,7 +203,17 @@ where
     log_row.add_suffix(&log_switch);
     group.add(&log_row);
 
-    window.set_content(Some(&page));
+    // ⚠️ AdwWindow **不支持** gtk_window_set_titlebar() —— libadwaita 会直接
+    //    Adwaita-ERROR abort（核心转储）。v1.0.0「一打开设置窗口就崩」
+    //    （Adwaita-ERROR: gtk_window_set_titlebar() is not supported for
+    //    AdwWindow）就是这个原因。
+    //    标题栏必须作为内容顶部的工具条：垂直 GtkBox 包 HeaderBar + 内容。
+    //    这是 libadwaita 1.1 起的标准写法（1.2+ 也可用 ToolbarView，取兼容写法）。
+    page.set_vexpand(true);
+    let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    root.append(&header);
+    root.append(&page);
+    window.set_content(Some(&root));
 
     // ── 保存 ────────────────────────────────────────────────────
     let cfg_cell: Rc<RefCell<Config>> = Rc::new(RefCell::new(current.clone()));

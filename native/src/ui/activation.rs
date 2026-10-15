@@ -33,7 +33,9 @@ where
         .build();
 
     let header = adw::HeaderBar::new();
-    window.set_titlebar(Some(&header));
+    // ⚠️ 不能调 window.set_titlebar()：AdwWindow 不支持，libadwaita 会直接
+    //    Adwaita-ERROR abort（核心转储）。HeaderBar 必须放进内容顶部，
+    //    见函数末尾的 root Box（同 settings.rs 的说明）。
 
     let page = adw::PreferencesPage::new();
     let status = license::check_status();
@@ -114,7 +116,12 @@ where
     result_group.add(&result_label);
     page.add(&result_group);
 
-    window.set_content(Some(&page));
+    // AdwWindow 不支持 set_titlebar —— HeaderBar 放进内容顶部（见上方注释）
+    page.set_vexpand(true);
+    let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    root.append(&header);
+    root.append(&page);
+    window.set_content(Some(&root));
 
     // 复制机器码到系统剪贴板。
     // 注意：String 没有 copy() 方法（Copy 是标记 trait，String 不实现），
