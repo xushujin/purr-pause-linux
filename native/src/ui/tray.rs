@@ -1,373 +1,591 @@
-//! 系统托盘：StatusNotifierItem / AppIndicator。
+//! 系统托盘：D-Bus StatusNotifierItem + com.canonical.dbusmenu。
 //!
-//! GTK4 本身不含托盘实现，需使用 libayatana-appindicator（AppIndicator3 的活跃分支）。
-//! 通过 C FFI 调用，不引入额外 Rust 依赖。
+//! GTK4 无法再加载 GTK3 的 libayatana-appindicator（同进程符号冲突），
+//! 因此直接实现 StatusNotifierItem 协议。Ubuntu 桌面自带的 AppIndicators
+//! 扩展（`org.kde.StatusNotifierWatcher`）与 KDE Plasma 原生支持该协议。
+//!
+//! 协议细节均对照参考实现源码核实（Ubuntu 22.04 实际发布的版本）：
+//!   - libayatana-appindicator 0.5.4：SNI 属性集与注册方式 ——
+//!     `RegisterStatusNotifierItem(s)` 传**对象路径**，watcher 从 D-Bus
+//!     sender 反查总线名（gnome-shell-extension-appindicator 42 的
+//!     statusNotifierWatcher.js 按「首字符是否为 '/'」区分两种风格）。
+//!   - libdbusmenu 18.10：GetLayout 节点结构为 `(ia{sv}av)` —— id 是 i32、
+//!     根节点 id 恒为 0、子节点以 v 包装、属性按需返回（空 filter = 全量）。
+//!   - 扩展侧消费方式（dbusMenu.js）：`GetLayout(0, -1, ['type',
+//!     'children-display'])` 拿骨架；新条目用 `GetGroupProperties(ids, [])`
+//!     拿全量属性；点击时 `Event(id, 'clicked', <'i' 0>, 0)`。
 
-use std::ffi::{c_char, c_int, c_void, CString};
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::rc::Rc;
 
-// AppIndicator 部分符号（从 libayatana-appindicator3.so dlsym）
-type IndicatorNew = unsafe extern "C" fn(*const c_char, *const c_char, c_int) -> *mut c_void;
-type IndicatorSetIcon = unsafe extern "C" fn(*mut c_void, *const c_char);
-type IndicatorSetStatus = unsafe extern "C" fn(*mut c_void, c_int);
-type IndicatorSetMenu = unsafe extern "C" fn(*mut c_void, *mut c_void);
+use gtk::gio;
+use gtk::glib;
+use gtk::glib::prelude::*;
 
-// GObject 符号在 GTK4 环境里确实存在，可以静态链接。
-// ⚠️ `#[link]` 属性必须放在 extern **块**上：放在单个 fn 上会被 rustc 警告
-//    "the link attribute cannot be used on foreign functions"，
-//    且该警告在未来版本会成为硬错误。
-#[link(name = "gobject-2.0")]
-unsafe extern "C" {
-    fn g_signal_connect_data(
-        instance: *mut c_void,
-        detailed_signal: *const c_char,
-        c_handler: *mut c_void,
-        data: *mut c_void,
-        destroy_data: *mut c_void,
-        connect_flags: c_int,
-    );
-
-    fn g_object_unref(obj: *mut c_void) -> *mut c_void;
-}
-
-// ---- GTK 菜单符号：绝不能静态链接 -----------------------------------------
-//
-// GTK4 **移除了 GtkMenu / GtkMenuItem**（由 GMenu + PopoverMenu 取代），
-// 因此 libgtk-4.so 里**没有** gtk_menu_new 等符号。
-// 若照旧写 `#[link(name = "gtk-4")]`，编译能过，但链接阶段会报
-// `undefined reference to 'gtk_menu_new'` —— 这类错误要到 Build 步骤最后才暴露。
-//
-// 所以这里一律改为**运行时 dlsym**。GTK4 环境下解析必然失败 →
-// `GtkMenuApi::load()` 返回 None → `Tray::new()` 返回 None →
-// 应用自动降级到 `tray_fallback_hint()`。
-//
-// 这是当前架构下唯一诚实的行为：libayatana-appindicator3 是基于 GTK3 的库，
-// 其 `app_indicator_set_menu` 需要 GTK3 的 GtkMenu；在 GTK4 进程内加载 GTK3
-// 会引发符号冲突，故「GTK4 应用 + appindicator 菜单」这条路走不通。
-//
-// TODO(托盘): 若要真正支持托盘菜单，应改用 D-Bus StatusNotifierItem
-//   （org.kde.StatusNotifierItem + com.canonical.dbusmenu），通过
-//   gio::DBusConnection 实现，完全不依赖 GTK3。菜单项结构（TrayItem）可直接复用。
-type GtkMenuNew = unsafe extern "C" fn() -> *mut c_void;
-type GtkMenuShellAppend = unsafe extern "C" fn(*mut c_void, *mut c_void);
-type GtkMenuItemNew = unsafe extern "C" fn(*const c_char) -> *mut c_void;
-type GtkMenuItemSetSubmenu = unsafe extern "C" fn(*mut c_void, *mut c_void);
-type GtkMenuItemSetSensitive = unsafe extern "C" fn(*mut c_void, c_int);
-
-/// 从指定 so 解析一个符号为裸指针（自由函数，避免闭包捕获导致后续 move 冲突）。
-unsafe fn resolve_sym(h: &libloading::Library, name: &[u8]) -> Option<*mut c_void> {
-    unsafe { h.get::<*mut c_void>(name).ok().map(|sym| *sym) }
-}
-
-/// 运行时解析出的 GTK 菜单 API。**在 GTK4 上解析失败是预期行为**。
-struct GtkMenuApi {
-    /// 持有 so 句柄，保证函数指针在整个生命周期内有效
-    _handle: libloading::Library,
-    menu_new: GtkMenuNew,
-    menu_shell_append: GtkMenuShellAppend,
-    menu_item_new: GtkMenuItemNew,
-    menu_item_set_submenu: GtkMenuItemSetSubmenu,
-    menu_item_set_sensitive: GtkMenuItemSetSensitive,
-}
-
-impl GtkMenuApi {
-    fn load() -> Option<Self> {
-        for name in ["libgtk-4.so.1", "libgtk-4.so.0", "libgtk-4.so"] {
-            let Ok(h) = (unsafe { libloading::Library::new(name) }) else {
-                continue;
-            };
-            // 先把全部符号解析到局部变量，最后再 move h（否则 E0505）
-            let Some(menu_new) = (unsafe { resolve_sym(&h, b"gtk_menu_new\0") }) else {
-                continue;
-            };
-            let Some(shell_append) =
-                (unsafe { resolve_sym(&h, b"gtk_menu_shell_append\0") })
-            else {
-                continue;
-            };
-            let Some(item_new) = (unsafe { resolve_sym(&h, b"gtk_menu_item_new\0") }) else {
-                continue;
-            };
-            let Some(item_submenu) =
-                (unsafe { resolve_sym(&h, b"gtk_menu_item_set_submenu\0") })
-            else {
-                continue;
-            };
-            let Some(item_sensitive) =
-                (unsafe { resolve_sym(&h, b"gtk_menu_item_set_sensitive\0") })
-            else {
-                continue;
-            };
-            return Some(Self {
-                _handle: h,
-                menu_new: unsafe { std::mem::transmute(menu_new) },
-                menu_shell_append: unsafe { std::mem::transmute(shell_append) },
-                menu_item_new: unsafe { std::mem::transmute(item_new) },
-                menu_item_set_submenu: unsafe { std::mem::transmute(item_submenu) },
-                menu_item_set_sensitive: unsafe { std::mem::transmute(item_sensitive) },
-            });
-        }
-        None
-    }
-}
-
-/// AppIndicator 库句柄（仅用于解析 AppIndicator 自身符号）。
-struct IndicatorLib {
-    _handle: libloading::Library,
-    indicator_new: IndicatorNew,
-    indicator_set_icon: IndicatorSetIcon,
-    indicator_set_status: IndicatorSetStatus,
-    indicator_set_menu: IndicatorSetMenu,
-    /// GTK 菜单 API。GTK4 上解析失败 → 整个托盘不可用。
-    gtk: GtkMenuApi,
-}
-
-impl IndicatorLib {
-    fn load() -> Option<Self> {
-        // 先确认 GTK 菜单符号可用。GTK4 已移除 GtkMenu，这里必然失败，
-        // 于是整个 load 直接返回 None —— 也就不必白加载 appindicator。
-        let gtk = GtkMenuApi::load()?;
-
-        let candidates = [
-            "libayatana-appindicator3.so.1",
-            "libayatana-appindicator3.so",
-            "libappindicator3.so.1",
-            "libappindicator3.so",
-        ];
-        for name in candidates {
-            // unsafe：动态库名来自固定白名单，非用户输入
-            let Ok(h) = (unsafe { libloading::Library::new(name) }) else {
-                continue;
-            };
-            // 先把 4 个符号全部解析到局部变量，最后再 move h ——
-            // 否则闭包/借用会与 `_handle: h` 的 move 冲突（E0505）。
-            let Some(new_f) = (unsafe { resolve_sym(&h, b"app_indicator_new\0") }) else {
-                continue;
-            };
-            let Some(icon_f) = (unsafe { resolve_sym(&h, b"app_indicator_set_icon\0") }) else {
-                continue;
-            };
-            let Some(status_f) =
-                (unsafe { resolve_sym(&h, b"app_indicator_set_status\0") })
-            else {
-                continue;
-            };
-            let Some(menu_f) = (unsafe { resolve_sym(&h, b"app_indicator_set_menu\0") }) else {
-                continue;
-            };
-            return Some(Self {
-                _handle: h,
-                indicator_new: unsafe { std::mem::transmute(new_f) },
-                indicator_set_icon: unsafe { std::mem::transmute(icon_f) },
-                indicator_set_status: unsafe { std::mem::transmute(status_f) },
-                indicator_set_menu: unsafe { std::mem::transmute(menu_f) },
-                gtk,
-            });
-        }
-        None
-    }
-}
-
-/// 一个菜单项及其回调。
+/// 托盘菜单项。结构保持与 electron 版托盘菜单一致，
+/// 由 main.rs 的 `build_tray_items` 构造；`label` 为 "---" 表示分隔线。
 pub struct TrayItem {
     pub label: String,
     pub sensitive: bool,
     pub submenu: Option<Vec<TrayItem>>,
-    pub action: Option<Box<dyn Fn() + 'static>>,
+    pub action: Option<Box<dyn Fn()>>,
 }
 
-/// 托盘图标封装。
-///
-/// 生命周期管理要点：
-///   - 每次 `set_menu` 会创建新的 GtkMenu，旧的必须 unref，否则泄漏
-///   - 每个带回调的菜单项持有一个 `Box<dyn Fn()>` 裸指针；
-///     通过 `g_signal_connect_data` 的 destroy_notify 机制回收
-///     （传 0 表示不自动销毁，故改为自管：在菜单 unref 时统一清理）
+// ---------------------------------------------------------------------------
+// D-Bus 接口描述（与扩展自带的 interfaces-xml 逐字段对齐）
+// ---------------------------------------------------------------------------
+
+const SNI_XML: &str = r#"<node>
+  <interface name="org.kde.StatusNotifierItem">
+    <property name="Category" type="s" access="read"/>
+    <property name="Id" type="s" access="read"/>
+    <property name="Title" type="s" access="read"/>
+    <property name="Status" type="s" access="read"/>
+    <property name="WindowId" type="i" access="read"/>
+    <property name="IconThemePath" type="s" access="read"/>
+    <property name="Menu" type="o" access="read"/>
+    <property name="ItemIsMenu" type="b" access="read"/>
+    <property name="IconName" type="s" access="read"/>
+    <property name="IconPixmap" type="a(iiay)" access="read"/>
+    <property name="OverlayIconName" type="s" access="read"/>
+    <property name="AttentionIconName" type="s" access="read"/>
+    <property name="AttentionIconPixmap" type="a(iiay)" access="read"/>
+    <property name="AttentionMovieName" type="s" access="read"/>
+    <property name="ToolTip" type="(sa(iiay)ss)" access="read"/>
+    <method name="Activate">
+      <arg type="i" name="x" direction="in"/>
+      <arg type="i" name="y" direction="in"/>
+    </method>
+    <method name="SecondaryActivate">
+      <arg type="i" name="x" direction="in"/>
+      <arg type="i" name="y" direction="in"/>
+    </method>
+    <method name="ContextMenu">
+      <arg type="i" name="x" direction="in"/>
+      <arg type="i" name="y" direction="in"/>
+    </method>
+    <method name="Scroll">
+      <arg type="i" name="delta" direction="in"/>
+      <arg type="s" name="orientation" direction="in"/>
+    </method>
+    <signal name="NewIcon"/>
+    <signal name="NewTitle"/>
+    <signal name="NewToolTip"/>
+    <signal name="NewStatus">
+      <arg type="s" name="status"/>
+    </signal>
+  </interface>
+</node>"#;
+
+const DBUSMENU_XML: &str = r#"<node>
+  <interface name="com.canonical.dbusmenu">
+    <property name="Version" type="u" access="read"/>
+    <property name="TextDirection" type="s" access="read"/>
+    <property name="Status" type="s" access="read"/>
+    <property name="IconThemePath" type="as" access="read"/>
+    <method name="GetLayout">
+      <arg type="i" name="parentId" direction="in"/>
+      <arg type="i" name="recursionDepth" direction="in"/>
+      <arg type="as" name="propertyNames" direction="in"/>
+      <arg type="u" name="revision" direction="out"/>
+      <arg type="(ia{sv}av)" name="layout" direction="out"/>
+    </method>
+    <method name="GetGroupProperties">
+      <arg type="ai" name="ids" direction="in"/>
+      <arg type="as" name="propertyNames" direction="in"/>
+      <arg type="a(ia{sv})" name="properties" direction="out"/>
+    </method>
+    <method name="GetProperty">
+      <arg type="i" name="id" direction="in"/>
+      <arg type="s" name="name" direction="in"/>
+      <arg type="v" name="value" direction="out"/>
+    </method>
+    <method name="Event">
+      <arg type="i" name="id" direction="in"/>
+      <arg type="s" name="eventId" direction="in"/>
+      <arg type="v" name="data" direction="in"/>
+      <arg type="u" name="timestamp" direction="in"/>
+    </method>
+    <method name="EventGroup">
+      <arg type="a(isvu)" name="events" direction="in"/>
+      <arg type="ai" name="idErrors" direction="out"/>
+    </method>
+    <method name="AboutToShow">
+      <arg type="i" name="id" direction="in"/>
+      <arg type="b" name="needUpdate" direction="out"/>
+    </method>
+    <method name="AboutToShowGroup">
+      <arg type="ai" name="ids" direction="in"/>
+      <arg type="ai" name="updatesNeeded" direction="out"/>
+      <arg type="ai" name="idErrors" direction="out"/>
+    </method>
+    <signal name="LayoutUpdated">
+      <arg type="u" name="revision"/>
+      <arg type="i" name="parent"/>
+    </signal>
+    <signal name="ItemsPropertiesUpdated">
+      <arg type="a(ia{sv})" name="updatedProps"/>
+      <arg type="a(ias)" name="removedProps"/>
+    </signal>
+    <signal name="ItemActivationRequested">
+      <arg type="i" name="id"/>
+      <arg type="u" name="timestamp"/>
+    </signal>
+  </interface>
+</node>"#;
+
+// ---------------------------------------------------------------------------
+// 内部状态
+// ---------------------------------------------------------------------------
+
+struct MenuNode {
+    label: String,
+    enabled: bool,
+    is_separator: bool,
+    children: Vec<i32>,
+    action: Option<Rc<dyn Fn()>>,
+}
+
+struct Shared {
+    /// SNI 的 Id / Title 属性
+    title: String,
+    icon_name: String,
+    /// dbusmenu 对象路径（SNI 的 Menu 属性指向它）
+    menu_path: String,
+    /// id（含根节点 0）→ 节点
+    items: HashMap<i32, MenuNode>,
+    revision: u32,
+    next_id: i32,
+}
+
 pub struct Tray {
-    lib: IndicatorLib,
-    indicator: *mut c_void,
-    app_name: CString,
-    /// 当前挂载的菜单（所有权在本结构，替换时释放旧的）
-    menu: *mut c_void,
-    /// 当前菜单里所有回调 Box 的裸指针，菜单销毁时一并回收
-    callbacks: Vec<*mut c_void>,
+    conn: gio::DBusConnection,
+    shared: Rc<RefCell<Shared>>,
+    // g_dbus_connection_register_object 会引用接口信息（introspection 与
+    // Properties 分发都要用），必须与注册同生命周期。
+    _sni_iface: gio::DBusInterfaceInfo,
+    _menu_iface: gio::DBusInterfaceInfo,
 }
 
-// AppIndicator/GTK 对象只在 UI 主线程使用。
-unsafe impl Send for Tray {}
+// ---------------------------------------------------------------------------
+// 公开 API（与旧版一致，main.rs 无需感知协议细节）
+// ---------------------------------------------------------------------------
 
 impl Tray {
-    pub fn new(app_name: &str, icon_name: &str) -> Option<Self> {
-        let lib = IndicatorLib::load()?;
-        let app = CString::new(app_name).ok()?;
-        let icon = CString::new(icon_name).ok()?;
+    /// 创建托盘：注册两个 D-Bus 对象并向 StatusNotifierWatcher 报到。
+    /// 任一步失败（无 session bus / 无 watcher 宿主）返回 None，调用方降级。
+    pub fn new(title: &str, icon_name: &str) -> Option<Tray> {
+        let conn = gio::bus_get_sync(gio::BusType::Session, gio::Cancellable::NONE).ok()?;
 
-        unsafe {
-            let indicator = (lib.indicator_new)(app.as_ptr(), icon.as_ptr(), INDICATOR_PASSIVE);
-            if indicator.is_null() {
-                return None;
-            }
-            Some(Self {
-                lib,
-                indicator,
-                app_name: app,
-                menu: std::ptr::null_mut(),
-                callbacks: Vec::new(),
+        let item_path = "/org/ayatana/NotificationItem/purr-pause-linux".to_string();
+        let menu_path = format!("{item_path}/Menu");
+
+        let shared = Rc::new(RefCell::new(Shared {
+            title: title.to_string(),
+            icon_name: icon_name.to_string(),
+            menu_path: menu_path.clone(),
+            // 根节点 id 恒为 0（libdbusmenu 约定）
+            items: HashMap::from([(
+                0,
+                MenuNode {
+                    label: String::new(),
+                    enabled: false,
+                    is_separator: false,
+                    children: Vec::new(),
+                    action: None,
+                },
+            )]),
+            revision: 0,
+            next_id: 1,
+        }));
+
+        let sni_node = gio::DBusNodeInfo::for_xml(SNI_XML).ok()?;
+        let sni_iface = sni_node.lookup_interface("org.kde.StatusNotifierItem")?;
+
+        let sh_props = shared.clone();
+        conn.register_object(&item_path, &sni_iface)
+            .method_call(
+                move |_conn, _sender, _path, _iface, method, _params, invocation| {
+                    // ItemIsMenu=true 时宿主直接展示菜单，这些方法一般不会被
+                    // 调到；仍需逐个应答，否则调用方会挂起到超时。
+                    invocation.return_value(Some(&no_reply()));
+                    let _ = method;
+                },
+            )
+            .property(move |_conn, _sender, _path, _iface, prop| {
+                let sh = sh_props.borrow();
+                sni_property(&sh, prop)
             })
-        }
+            .build()
+            .ok()?;
+
+        let menu_node = gio::DBusNodeInfo::for_xml(DBUSMENU_XML).ok()?;
+        let menu_iface = menu_node.lookup_interface("com.canonical.dbusmenu")?;
+
+        let sh_menu = shared.clone();
+        conn.register_object(&menu_path, &menu_iface)
+            .method_call(
+                move |_conn, _sender, _path, _iface, method, params, invocation| {
+                    menu_method(&sh_menu, method, &params, invocation);
+                },
+            )
+            .property(move |_conn, _sender, _path, _iface, prop| menu_property(prop))
+            .build()
+            .ok()?;
+
+        // 向 watcher 报到。没有 watcher 宿主（GNOME 未装 AppIndicators 扩展）
+        // 时这一步会报错 —— 此时托盘无从展示，按不可用处理。
+        conn.call_sync(
+            Some("org.kde.StatusNotifierWatcher"),
+            "/StatusNotifierWatcher",
+            "org.kde.StatusNotifierWatcher",
+            "RegisterStatusNotifierItem",
+            Some(&glib::Variant::tuple_from_iter([item_path.to_variant()])),
+            None,
+            gio::DBusCallFlags::NONE,
+            -1,
+            gio::Cancellable::NONE,
+        )
+        .ok()?;
+
+        Some(Tray {
+            conn,
+            shared,
+            _sni_iface: sni_iface,
+            _menu_iface: menu_iface,
+        })
     }
 
-    /// 重建托盘菜单。先释放旧菜单与旧回调，再挂载新菜单。
-    pub fn set_menu(&mut self, items: &[TrayItem]) {
-        unsafe {
-            // 1) 回收上一轮菜单与回调
-            self.free_current_menu();
+    /// 重建菜单内容。
+    ///
+    /// 重新分配全部条目 id 并递增 revision，然后广播 `LayoutUpdated` ——
+    /// 宿主（GNOME 扩展 / Plasma）收到后会重新拉取布局与属性。
+    pub fn set_menu(&mut self, items: Vec<TrayItem>) {
+        let (rev, menu_path) = {
+            let mut sh = self.shared.borrow_mut();
+            sh.items.clear();
+            sh.items.insert(
+                0,
+                MenuNode {
+                    label: String::new(),
+                    enabled: false,
+                    is_separator: false,
+                    children: Vec::new(),
+                    action: None,
+                },
+            );
+            sh.next_id = 1;
+            for it in items {
+                flatten_item(it, &mut sh, 0);
+            }
+            sh.revision += 1;
+            (sh.revision, sh.menu_path.clone())
+        };
 
-            // 2) 构建新菜单
-            // 先把函数指针拷到局部变量（fn 指针是 Copy）：这样 `&self.lib.gtk`
-            // 的不可变借用立即结束，不会与下面的 `self.build_item(&mut self)` 冲突。
-            let menu_new = self.lib.gtk.menu_new;
-            let menu_shell_append = self.lib.gtk.menu_shell_append;
-            let menu = (menu_new)();
-            if menu.is_null() {
+        let params = glib::Variant::tuple_from_iter([rev.to_variant(), 0i32.to_variant()]);
+        let _ = self.conn.emit_signal(
+            None,
+            &menu_path,
+            "com.canonical.dbusmenu",
+            "LayoutUpdated",
+            Some(&params),
+        );
+    }
+}
+
+/// 把单个条目（及其子树）插入 items 表并挂到 parent 下。
+///
+/// 按值接管 TrayItem：action 是 `Box<dyn Fn()>`，不可克隆，
+/// 而 set_menu 每次都是全新构建（所有权归这里正合适）。
+fn flatten_item(item: TrayItem, sh: &mut Shared, parent_id: i32) {
+    let is_sep = item.label.trim() == "---";
+    let id = sh.next_id;
+    sh.next_id += 1;
+    let mut node = MenuNode {
+        label: if is_sep { String::new() } else { item.label },
+        enabled: item.sensitive && !is_sep,
+        is_separator: is_sep,
+        children: Vec::new(),
+        action: None,
+    };
+    if let Some(sub) = item.submenu {
+        for sub_item in sub {
+            flatten_item(sub_item, sh, id);
+        }
+    }
+    if let Some(a) = item.action {
+        node.action = Some(Rc::new(a));
+    }
+    if let Some(p) = sh.items.get_mut(&parent_id) {
+        p.children.push(id);
+    }
+    sh.items.insert(id, node);
+}
+
+// ---------------------------------------------------------------------------
+// SNI：属性
+// ---------------------------------------------------------------------------
+
+fn sni_property(sh: &Shared, prop: &str) -> glib::Variant {
+    match prop {
+        "Category" => "ApplicationStatus".to_variant(),
+        "Id" => sh.title.to_variant(),
+        "Title" => sh.title.to_variant(),
+        "Status" => "Active".to_variant(),
+        "WindowId" => 0i32.to_variant(),
+        "IconThemePath" => "".to_variant(),
+        // Menu 属性类型是 o（对象路径），必须用 ObjectPath 构造出 "o" 类型
+        "Menu" => glib::variant::ObjectPath::try_from(sh.menu_path.clone())
+            .expect("菜单对象路径合法")
+            .to_variant(),
+        // true：宿主点击图标直接展示菜单（与 electron 托盘行为一致）
+        "ItemIsMenu" => true.to_variant(),
+        "IconName" => sh.icon_name.to_variant(),
+        "IconPixmap" | "AttentionIconPixmap" => empty_pixmaps(),
+        "OverlayIconName" | "AttentionIconName" | "AttentionMovieName" => "".to_variant(),
+        "ToolTip" => glib::Variant::tuple_from_iter([
+            sh.icon_name.to_variant(),
+            empty_pixmaps(),
+            sh.title.to_variant(),
+            "胖猫暂停一下：点开菜单可暂停监控、打开设置".to_variant(),
+        ]),
+        _ => "".to_variant(),
+    }
+}
+
+/// 空 IconPixmap：`a(iiay)`（宽, 高, ARGB 字节）
+fn empty_pixmaps() -> glib::Variant {
+    array_of("(iiay)", Vec::new())
+}
+
+// ---------------------------------------------------------------------------
+// dbusmenu：属性
+// ---------------------------------------------------------------------------
+
+fn menu_property(prop: &str) -> glib::Variant {
+    match prop {
+        "Version" => 3u32.to_variant(),
+        "TextDirection" => "ltr".to_variant(),
+        "Status" => "normal".to_variant(),
+        "IconThemePath" => array_of("s", Vec::<glib::Variant>::new()),
+        _ => "".to_variant(),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// dbusmenu：方法分发
+// ---------------------------------------------------------------------------
+
+fn menu_method(
+    sh: &Rc<RefCell<Shared>>,
+    method: &str,
+    params: &glib::Variant,
+    invocation: gio::DBusMethodInvocation,
+) {
+    match method {
+        "GetLayout" => {
+            let parent = params.child_value(0).get::<i32>().unwrap_or(0);
+            let depth = params.child_value(1).get::<i32>().unwrap_or(-1);
+            let filter = str_filter(&params.child_value(2));
+            let sh = sh.borrow();
+            if !sh.items.contains_key(&parent) {
+                drop(sh);
+                invocation.return_dbus_error(
+                    "com.canonical.dbusmenu.Error.UnknownParent",
+                    "unknown parent id",
+                );
                 return;
             }
-            for item in items {
-                let native = self.build_item(item);
-                if !native.is_null() {
-                    (menu_shell_append)(menu, native);
+            let rev = sh.revision;
+            let node = layout_node(&sh, parent, depth, filter.as_deref());
+            drop(sh);
+            invocation
+                .return_value(Some(&glib::Variant::tuple_from_iter([rev.to_variant(), node])));
+        }
+        "GetGroupProperties" => {
+            let ids = i32_array(&params.child_value(0));
+            let filter = str_filter(&params.child_value(1));
+            let sh = sh.borrow();
+            let tuples: Vec<glib::Variant> = ids
+                .iter()
+                .filter_map(|id| {
+                    sh.items.get(id).map(|it| {
+                        glib::Variant::tuple_from_iter([
+                            id.to_variant(),
+                            item_props(it, filter.as_deref()),
+                        ])
+                    })
+                })
+                .collect();
+            drop(sh);
+            let arr = array_of("(ia{sv})", tuples);
+            invocation.return_value(Some(&glib::Variant::tuple_from_iter([arr])));
+        }
+        "GetProperty" => {
+            let id = params.child_value(0).get::<i32>().unwrap_or(-1);
+            let name = params.child_value(1).str().unwrap_or("").to_string();
+            let sh = sh.borrow();
+            let value = sh
+                .items
+                .get(&id)
+                .map(|it| item_props(it, None))
+                .and_then(|dict| dict_lookup(&dict, &name))
+                .unwrap_or_else(|| "".to_variant());
+            drop(sh);
+            // 返回类型是 v：把属性值包进 variant
+            invocation
+                .return_value(Some(&glib::Variant::tuple_from_iter([glib::Variant::from_variant(&value)])));
+        }
+        "Event" => {
+            let id = params.child_value(0).get::<i32>().unwrap_or(-1);
+            let event = params.child_value(1).str().unwrap_or("").to_string();
+            let action = sh.borrow().items.get(&id).and_then(|n| n.action.clone());
+            // 先应答再执行动作：动作里可能开窗口（重入主循环）
+            invocation.return_value(Some(&no_reply()));
+            if event == "clicked" {
+                if let Some(a) = action {
+                    a();
                 }
             }
-
-            // 3) 挂到 indicator
-            (self.lib.indicator_set_menu)(self.indicator, menu);
-            (self.lib.indicator_set_status)(self.indicator, INDICATOR_ACTIVE);
-
-            self.menu = menu;
         }
-    }
-
-    unsafe fn free_current_menu(&mut self) {
-        // 回收回调 Box
-        for cb in self.callbacks.drain(..) {
-            if !cb.is_null() {
-                drop(Box::from_raw(cb as *mut Box<dyn Fn()>));
-            }
-        }
-        // 释放菜单（会连带释放其下的菜单项）
-        if !self.menu.is_null() {
-            g_object_unref(self.menu);
-            self.menu = std::ptr::null_mut();
-        }
-    }
-
-    unsafe fn build_item(&mut self, item: &TrayItem) -> *mut c_void {
-        let Ok(label) = CString::new(item.label.as_str()) else {
-            return std::ptr::null_mut();
-        };
-        // 同样先把函数指针拷到局部变量，避免 `&self.lib.gtk` 的不可变借用
-        // 跨越后面的 `self.build_item(&mut self)` 与 `self.callbacks.push`（E0502）。
-        let menu_new = self.lib.gtk.menu_new;
-        let menu_item_new = self.lib.gtk.menu_item_new;
-        let menu_item_set_sensitive = self.lib.gtk.menu_item_set_sensitive;
-        let menu_shell_append = self.lib.gtk.menu_shell_append;
-        let menu_item_set_submenu = self.lib.gtk.menu_item_set_submenu;
-
-        let mi = (menu_item_new)(label.as_ptr());
-        if mi.is_null() {
-            return std::ptr::null_mut();
-        }
-        (menu_item_set_sensitive)(mi, if item.sensitive { 1 } else { 0 });
-
-        if let Some(sub) = &item.submenu {
-            let sm = (menu_new)();
-            for s in sub {
-                let child = self.build_item(s);
-                if !child.is_null() {
-                    (menu_shell_append)(sm, child);
+        "EventGroup" => {
+            let events = params.child_value(0);
+            let mut errors: Vec<glib::Variant> = Vec::new();
+            let mut actions: Vec<Rc<dyn Fn()>> = Vec::new();
+            {
+                let sh = sh.borrow();
+                for i in 0..events.n_children() {
+                    let ev = events.child_value(i);
+                    let id = ev.child_value(0).get::<i32>().unwrap_or(-1);
+                    let event = ev.child_value(1).str().unwrap_or("").to_string();
+                    match sh.items.get(&id).and_then(|n| n.action.clone()) {
+                        Some(a) if event == "clicked" => actions.push(a),
+                        Some(_) => {}
+                        None => errors.push(id.to_variant()),
+                    }
                 }
             }
-            (menu_item_set_submenu)(mi, sm);
-        } else if let Some(action) = &item.action {
-            // 把 Rust 闭包装箱后转成裸指针，作为 signal 的 user_data。
-            // 生命周期由 self.callbacks 管理，菜单销毁时统一 drop。
-            //
-            // ⚠️ 必须只装箱一层：若写成 Box::into_raw(Box::new(boxed))，
-            //    存进去的是 *mut Box<dyn Fn()>，而 on_activate 按 *mut Box<dyn Fn()>
-            //    解引用，层级不匹配会读到错误的 vtable（运行时 UB）。
-            let boxed: Box<dyn Fn()> = Box::new(move || action());
-            let raw = Box::into_raw(boxed) as *mut c_void;
-            self.callbacks.push(raw);
-
-            g_signal_connect_data(
-                mi,
-                c"activate".as_ptr(),
-                on_activate as *mut c_void,
-                raw,
-                std::ptr::null_mut(),
-                0,
+            invocation
+                .return_value(Some(&glib::Variant::tuple_from_iter([array_of("i", errors)])));
+            for a in actions {
+                a();
+            }
+        }
+        "AboutToShow" => {
+            // 布局始终是现成的（set_menu 后即广播），无需触发更新
+            invocation.return_value(Some(&glib::Variant::tuple_from_iter([false.to_variant()])));
+        }
+        "AboutToShowGroup" => {
+            let empty = array_of("i", Vec::<glib::Variant>::new());
+            invocation
+                .return_value(Some(&glib::Variant::tuple_from_iter([empty.clone(), empty])));
+        }
+        _ => {
+            invocation.return_dbus_error(
+                "org.freedesktop.DBus.Error.UnknownMethod",
+                "unknown dbusmenu method",
             );
         }
-        mi
     }
+}
 
-    #[allow(dead_code)]
-    pub fn set_icon(&mut self, icon_name: &str) {
-        if let Ok(icon) = CString::new(icon_name) {
-            unsafe {
-                (self.lib.indicator_set_icon)(self.indicator, icon.as_ptr());
-            }
+// ---------------------------------------------------------------------------
+// 布局与属性构造
+// ---------------------------------------------------------------------------
+
+/// 递归构造 `(ia{sv}av)` 节点。
+fn layout_node(sh: &Shared, id: i32, depth: i32, filter: Option<&[String]>) -> glib::Variant {
+    let (props, children) = match sh.items.get(&id) {
+        Some(it) => (item_props(it, filter), it.children.clone()),
+        None => (dict_of(vec![]), Vec::new()),
+    };
+    // depth 语义（dbusmenu 规范）：-1 = 全部递归；0 = 不含子节点；n = 递归 n 层。
+    // 非负 depth 逐层递减，叶子节点自然终止。
+    let child_variants: Vec<glib::Variant> = if depth == 0 {
+        Vec::new()
+    } else {
+        children
+            .iter()
+            .map(|c| glib::Variant::from_variant(&layout_node(sh, *c, depth - 1, filter)))
+            .collect()
+    };
+    glib::Variant::tuple_from_iter([id.to_variant(), props, array_of("v", child_variants)])
+}
+
+/// 节点属性字典 `a{sv}`。filter 为 None（空 propertyNames）时返回全量。
+fn item_props(item: &MenuNode, filter: Option<&[String]>) -> glib::Variant {
+    let mut entries: Vec<glib::Variant> = Vec::new();
+    let mut push = |name: &str, value: glib::Variant| {
+        let wanted = match filter {
+            Some(names) => names.iter().any(|n| n == name),
+            None => true,
+        };
+        if wanted {
+            entries.push(glib::Variant::from_dict_entry(&name.to_variant(), &value));
+        }
+    };
+    if item.is_separator {
+        push("type", "separator".to_variant());
+    } else {
+        // 规范约定：只返回非默认值。enabled 默认 true，false 才需要下发。
+        if !item.label.is_empty() {
+            push("label", item.label.to_variant());
+        }
+        if !item.enabled {
+            push("enabled", false.to_variant());
+        }
+        if !item.children.is_empty() {
+            push("children-display", "submenu".to_variant());
         }
     }
+    dict_of(entries)
 }
 
-/// GTK "activate" 信号回调。user_data 是 `*mut Box<dyn Fn()>`。
-extern "C" fn on_activate(_item: *mut c_void, user_data: *mut c_void) {
-    if user_data.is_null() {
-        return;
+fn dict_of(entries: Vec<glib::Variant>) -> glib::Variant {
+    array_of("{sv}", entries)
+}
+
+/// 构造数组。注意 gio 的 `array_from_iter_with_type` 的参数是**元素类型**
+/// （内部会对它做 as_array），所以传 "{sv}" 得到的是 "a{sv}"。
+fn array_of(elem_type: &str, children: Vec<glib::Variant>) -> glib::Variant {
+    let ty = glib::VariantTy::new(elem_type).expect("合法的 Variant 类型串");
+    glib::Variant::array_from_iter_with_type(&ty, children)
+}
+
+/// 无返回值方法的标准应答（空元组 "()"）。
+fn no_reply() -> glib::Variant {
+    glib::Variant::tuple_from_iter(Vec::<glib::Variant>::new())
+}
+
+/// 在 `a{sv}` 字典里按 key 查找（glib 0.22 的 Variant 没有 lookup_value）。
+fn dict_lookup(dict: &glib::Variant, name: &str) -> Option<glib::Variant> {
+    (0..dict.n_children())
+        .map(|i| dict.child_value(i))
+        .find(|e| e.child_value(0).str() == Some(name))
+        .map(|e| e.child_value(1))
+}
+
+/// 解析 propertyNames（"as"）：空数组 → None（表示全量）。
+fn str_filter(v: &glib::Variant) -> Option<Vec<String>> {
+    if v.n_children() == 0 {
+        return None;
     }
-    unsafe {
-        let f = &*(user_data as *const Box<dyn Fn()>);
-        f();
-    }
+    Some(
+        (0..v.n_children())
+            .filter_map(|i| v.child_value(i).get::<String>())
+            .collect(),
+    )
 }
 
-impl Drop for Tray {
-    fn drop(&mut self) {
-        unsafe {
-            self.free_current_menu();
-            if !self.indicator.is_null() {
-                g_object_unref(self.indicator);
-                self.indicator = std::ptr::null_mut();
-            }
-        }
-        let _ = &self.app_name;
-    }
+fn i32_array(v: &glib::Variant) -> Vec<i32> {
+    (0..v.n_children())
+        .filter_map(|i| v.child_value(i).get::<i32>())
+        .collect()
 }
 
-pub const INDICATOR_PASSIVE: c_int = 1;
-pub const INDICATOR_ACTIVE: c_int = 0;
+// ---------------------------------------------------------------------------
 
-/// 判断当前会话是否有可用的托盘宿主。
-#[allow(dead_code)]
-pub fn tray_supported() -> bool {
-    std::env::var("XDG_CURRENT_DESKTOP")
-        .map(|d| {
-            let d = d.to_lowercase();
-            d.contains("gnome")
-                || d.contains("kde")
-                || d.contains("plasma")
-                || d.contains("xfce")
-                || d.contains("lxde")
-                || d.contains("lxqt")
-                || d.contains("mate")
-                || d.contains("unity")
-                || d.contains("cinnamon")
-                || d.contains("budgie")
-        })
-        .unwrap_or(false)
-}
-
-/// 托盘不可用时的降级提示文案。
 pub fn tray_fallback_hint() -> String {
     "当前桌面环境没有可用的系统托盘宿主\n（例如 GNOME 需安装 gnome-shell-extension-appindicator）。\n应用将无法通过托盘菜单访问设置。"
         .to_string()

@@ -647,7 +647,7 @@ fn build_tray(state: &Rc<RefCell<AppState>>) {
     };
 
     let items = build_tray_items(state);
-    tray.set_menu(&items);
+    tray.set_menu(items);
     // 托盘实例必须保持存活，否则图标会从托盘消失。
     TRAY.with(|t| *t.borrow_mut() = Some(tray));
 }
@@ -803,7 +803,7 @@ fn refresh_tray(state: &Rc<RefCell<AppState>>) {
     let items = build_tray_items(state);
     TRAY.with(|t| {
         if let Some(tray) = t.borrow_mut().as_mut() {
-            tray.set_menu(&items);
+            tray.set_menu(items);
         }
     });
 }
