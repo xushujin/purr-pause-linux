@@ -447,11 +447,11 @@ fn menu_method(
                 .get(&id)
                 .map(|it| item_props(it, None))
                 .and_then(|dict| dict_lookup(&dict, &name))
-                .unwrap_or_else(|| "".to_variant());
+                // 字典条目里存的就是包好的 v，缺属性时补一个空串的 v
+                .unwrap_or_else(|| glib::Variant::from_variant(&"".to_variant()));
             drop(sh);
-            // 返回类型是 v：把属性值包进 variant
-            invocation
-                .return_value(Some(&glib::Variant::tuple_from_iter([glib::Variant::from_variant(&value)])));
+            // 返回类型 (v)：value 本身已是 v，直接放入元组
+            invocation.return_value(Some(&glib::Variant::tuple_from_iter([value])));
         }
         "Event" => {
             let id = params.child_value(0).get::<i32>().unwrap_or(-1);
@@ -538,7 +538,13 @@ fn item_props(item: &MenuNode, filter: Option<&[String]>) -> glib::Variant {
             None => true,
         };
         if wanted {
-            entries.push(glib::Variant::from_dict_entry(&name.to_variant(), &value));
+            // ⚠️ a{sv} 的 v 表示 value 必须是**包了一层的 variant**。
+            //    from_dict_entry 不会自动包装 —— 直接传裸值会得到 {ss} 之类
+            //    的错型条目，array_from_iter_with_type 断言失败（实测核心转储）。
+            entries.push(glib::Variant::from_dict_entry(
+                &name.to_variant(),
+                &glib::Variant::from_variant(&value),
+            ));
         }
     };
     if item.is_separator {
