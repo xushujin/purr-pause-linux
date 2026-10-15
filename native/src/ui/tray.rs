@@ -178,8 +178,24 @@ impl Tray {
     pub fn new(title: &str, icon_name: &str) -> Option<Tray> {
         let conn = gio::bus_get_sync(gio::BusType::Session, gio::Cancellable::NONE).ok()?;
 
-        let item_path = "/org/ayatana/NotificationItem/purr-pause-linux".to_string();
+        // ⚠️ D-Bus 对象路径的每段只允许 [A-Za-z0-9_]，**不含连字符**。
+        //    应用 id "purr-pause-linux" 直接拼进路径会命中
+        //    g_dbus_connection_register_object 的 assertion（实测：
+        //    GLib-GIO-CRITICAL ... assertion 'object_path != NULL &&
+        //    g_variant_is_object_path (object_path)' failed），
+        //    且 gio-rs 的 build() 对这种「断言失败但未设 GError」的情况
+        //    会静默返回 id=0 —— 图标无声消失。
+        //    libappindicator 源码里的 clean_id 就是同款清洗。
+        let clean = |s: &str| -> String {
+            s.chars()
+                .map(|c| if c.is_ascii_alphanumeric() || c == '_' { c } else { '_' })
+                .collect()
+        };
+        let item_path = format!("/org/ayatana/NotificationItem/{}", clean("purr-pause-linux"));
         let menu_path = format!("{item_path}/Menu");
+        if !glib::Variant::is_object_path(&item_path) || !glib::Variant::is_object_path(&menu_path) {
+            return None;
+        }
 
         let shared = Rc::new(RefCell::new(Shared {
             title: title.to_string(),
