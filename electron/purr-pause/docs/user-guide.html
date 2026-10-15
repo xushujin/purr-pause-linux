@@ -1,0 +1,427 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>胖猫暂停一下（PurrPause） - 用户操作指南</title>
+    <style>
+        :root {
+            --orange-50: #fff7ed;
+            --orange-100: #ffedd5;
+            --orange-200: #fed7aa;
+            --orange-300: #fdba74;
+            --orange-400: #fb923c;
+            --orange-500: #f97316;
+            --orange-600: #ea580c;
+            --orange-700: #c2410c;
+            --orange-800: #9a3412;
+            --orange-900: #7c2d12;
+            --gray-50: #f9fafb;
+            --gray-100: #f3f4f6;
+            --gray-200: #e5e7eb;
+            --gray-700: #374151;
+            --gray-800: #1f2937;
+            --gray-900: #111827;
+            --green-500: #22c55e;
+        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans SC", sans-serif;
+            line-height: 1.8;
+            color: var(--gray-800);
+            background: var(--gray-50);
+        }
+        .header {
+            background: linear-gradient(135deg, var(--orange-400), var(--orange-600));
+            color: white;
+            padding: 48px 32px;
+            text-align: center;
+        }
+        .header h1 { font-size: 2.2rem; margin-bottom: 8px; }
+        .header p { opacity: 0.9; font-size: 1.1rem; }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 40px 32px;
+        }
+        h2 {
+            color: var(--orange-700);
+            font-size: 1.6rem;
+            margin-top: 48px;
+            margin-bottom: 16px;
+            padding-bottom: 8px;
+            border-bottom: 2px solid var(--orange-200);
+        }
+        h3 {
+            color: var(--orange-800);
+            font-size: 1.2rem;
+            margin-top: 28px;
+            margin-bottom: 12px;
+        }
+        p { margin-bottom: 12px; }
+        ul, ol { margin-bottom: 12px; padding-left: 24px; }
+        li { margin-bottom: 6px; }
+        code {
+            background: var(--orange-50);
+            border: 1px solid var(--orange-200);
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 0.9em;
+            font-family: "JetBrains Mono", "Fira Code", monospace;
+        }
+        pre {
+            background: var(--gray-900);
+            color: #e5e7eb;
+            padding: 20px 24px;
+            border-radius: 8px;
+            overflow-x: auto;
+            margin: 16px 0;
+            font-size: 0.88rem;
+            line-height: 1.6;
+        }
+        pre code { background: none; border: none; padding: 0; color: inherit; }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 16px 0;
+            font-size: 0.92rem;
+        }
+        th {
+            background: var(--orange-100);
+            color: var(--orange-800);
+            padding: 10px 14px;
+            text-align: left;
+            font-weight: 600;
+        }
+        td { padding: 10px 14px; border-bottom: 1px solid var(--gray-200); }
+        tr:hover td { background: var(--orange-50); }
+        .feature-list {
+            list-style: none;
+            padding: 0;
+        }
+        .feature-list li {
+            padding: 8px 0 8px 28px;
+            position: relative;
+        }
+        .feature-list li::before {
+            content: "🐱";
+            position: absolute;
+            left: 0;
+        }
+        .tip {
+            background: var(--orange-50);
+            border-left: 4px solid var(--orange-400);
+            padding: 12px 16px;
+            margin: 16px 0;
+            border-radius: 0 8px 8px 0;
+        }
+        .step-box {
+            background: white;
+            border: 1px solid var(--orange-200);
+            border-radius: 12px;
+            padding: 20px 24px;
+            margin: 16px 0;
+        }
+        .step-box h4 {
+            color: var(--orange-600);
+            margin-bottom: 8px;
+        }
+        .faq-item {
+            background: white;
+            border: 1px solid var(--orange-100);
+            border-radius: 10px;
+            padding: 16px 20px;
+            margin: 12px 0;
+        }
+        .faq-item strong {
+            color: var(--orange-700);
+            display: block;
+            margin-bottom: 8px;
+            font-size: 1.02rem;
+        }
+        .kbd {
+            display: inline-block;
+            background: var(--gray-100);
+            border: 1px solid var(--gray-200);
+            border-radius: 4px;
+            padding: 2px 8px;
+            font-family: monospace;
+            font-size: 0.9em;
+            box-shadow: 0 1px 2px rgba(0,0,0,0.1);
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>胖猫暂停一下（PurrPause） 用户操作指南</h1>
+        <p>让胖猫守护你的健康 — 使用说明</p>
+    </div>
+    <div class="container">
+
+        <h2>1. 什么是「胖猫暂停一下（PurrPause）」？</h2>
+        <p>胖猫暂停一下（PurrPause）是一款桌面休息提醒应用。当你连续使用电脑超过设定时间后，一只胖猫会在屏幕中央走出来，占据你的屏幕，温柔地提醒你：该休息了！</p>
+        <p>休息倒计时结束后，猫咪会自动离开。你也可以随时手动关闭提醒。</p>
+
+        <p><strong>核心特点：</strong></p>
+        <ul class="feature-list">
+            <li>轻量无打扰 — 平时只在系统托盘安静运行</li>
+            <li>可爱动画 — 透明背景的胖猫走上你的屏幕</li>
+            <li>灵活配置 — 自定义工作时长和休息时长</li>
+            <li>支持自定义 — 可以替换成你喜欢的猫咪视频</li>
+        </ul>
+
+        <h2>2. 安装</h2>
+        <h3>2.1 下载安装包</h3>
+        <p>从项目发布页面下载最新的 <code>.deb</code> 安装包。</p>
+
+        <h3>2.2 安装</h3>
+<pre><code>sudo dpkg -i purr-pause_1.4.0_amd64.deb</code></pre>
+
+        <h3>2.3 安装空闲检测工具（推荐）</h3>
+        <p>为了让应用能准确检测你是否在使用电脑，建议安装：</p>
+<pre><code>sudo apt install xprintidle</code></pre>
+
+        <h2>3. 首次启动</h2>
+        <p>安装完成后，你可以通过以下方式启动：</p>
+        <ul>
+            <li><strong>应用菜单</strong>：在应用列表中搜索 "胖猫暂停一下"</li>
+            <li><strong>终端</strong>：运行 <code>/opt/purr-pause/purr-pause</code></li>
+        </ul>
+
+        <p>启动后，应用会：</p>
+        <div class="step-box">
+            <h4>启动流程</h4>
+            <ol>
+                <li>在系统托盘显示一个猫咪图标</li>
+                <li>开始在后台计时</li>
+                <li>自动创建配置目录 <code>~/.config/purr-pause/</code></li>
+            </ol>
+        </div>
+        <p>应用没有主窗口，所有操作通过系统托盘图标进行。</p>
+
+        <h2>4. 系统托盘使用</h2>
+        <h3>4.1 查看状态</h3>
+        <p>点击托盘图标打开菜单，菜单顶部显示激活状态和距下次休息的剩余时间。</p>
+
+        <h3>4.2 右键菜单</h3>
+        <table>
+            <tr><th>菜单项</th><th>功能</th></tr>
+            <tr><td>试用中/已激活</td><td>显示当前激活状态</td></tr>
+            <tr><td>距下次休息: XX 分钟</td><td>显示距下次休息的剩余时间</td></tr>
+            <tr><td>待办消息（N）</td><td>打开待办消息列表（N 为未读条数）</td></tr>
+            <tr><td>消息提醒设置</td><td>打开消息提醒设置窗口</td></tr>
+            <tr><td>暂停监控</td><td>子菜单：30 分钟 / 1 小时 / 2 小时 / 直到手动恢复</td></tr>
+            <tr><td>激活/续期</td><td>打开激活窗口</td></tr>
+            <tr><td>设置</td><td>打开设置窗口</td></tr>
+            <tr><td>计时规则</td><td>打开计时规则说明窗口</td></tr>
+            <tr><td>查看日志</td><td>打开日志文件</td></tr>
+            <tr><td>小火箭演示</td><td>演示小火箭消息提醒动画</td></tr>
+            <tr><td>立即测试</td><td>立即触发猫咪动画（用于测试）</td></tr>
+            <tr><td>重置计时</td><td>将当前计时归零</td></tr>
+            <tr><td>v1.4.0</td><td>显示当前软件版本号</td></tr>
+            <tr><td>退出</td><td>关闭应用</td></tr>
+        </table>
+        <p>暂停监控期间，菜单显示"监控已暂停"，"暂停监控"变为"恢复监控"。</p>
+
+        <h2>5. 设置</h2>
+        <p>点击托盘菜单中的"设置"，打开设置窗口：</p>
+
+        <h3>5.1 屏幕使用时间</h3>
+        <p>设定连续使用电脑多长时间后触发休息提醒。</p>
+        <ul>
+            <li>默认值：45 分钟</li>
+            <li>可设范围：1 ~ 480 分钟</li>
+        </ul>
+
+        <h3>5.2 休息时长</h3>
+        <p>设定每次休息的倒计时时长。倒计时结束后猫咪会自动消失。</p>
+        <ul>
+            <li>默认值：5 分钟</li>
+            <li>可设范围：1 ~ 60 分钟</li>
+        </ul>
+
+        <h3>5.3 动画模式（仅激活用户）</h3>
+        <p>可选择猫咪出现的方式：右下角走出、中央淡入、右侧走出或中央走出。试用期用户此功能不可用。</p>
+
+        <h3>5.4 开机自动启动</h3>
+        <p>勾选后，系统启动时自动运行 胖猫暂停一下（PurrPause）。Ubuntu 下应用会写入当前用户的 <code>~/.config/autostart/purr-pause.desktop</code>，取消勾选会删除该文件。</p>
+
+        <h3>5.5 素材目录（仅激活用户）</h3>
+        <p>已激活用户可以在设置中选择自定义素材目录。选择后，目录下会自动生成一份素材说明文件。试用期用户此功能不可用。</p>
+
+        <h3>5.6 保存设置</h3>
+        <p>点击"保存"按钮，设置立即生效。点击"取消"关闭窗口不保存。</p>
+
+        <h2>6. 激活与序列号</h2>
+        <h3>6.1 试用期</h3>
+        <p>首次安装后有 7 天免费试用期。试用期内所有基本功能可用。</p>
+
+        <h3>6.2 获取序列号</h3>
+        <ol>
+            <li>打开激活窗口（右键托盘图标 → 激活/续期）</li>
+            <li>窗口中会显示你的机器码（16 位），点击"复制"按钮</li>
+            <li>将机器码发送给开发者</li>
+            <li>开发者会根据你的机器码生成专属序列号</li>
+        </ol>
+
+        <h3>6.3 输入序列号</h3>
+        <ol>
+            <li>在激活窗口中粘贴或输入序列号</li>
+            <li>点击"激活"按钮</li>
+            <li>激活成功后会显示授权类型和有效期</li>
+        </ol>
+
+        <h3>6.4 注意事项</h3>
+        <ul>
+            <li>每个序列号绑定特定机器，不可在其他设备上使用</li>
+            <li>序列号格式：以 <code>PP-</code> 为前缀，后接 Base64 编码数据，并按每 8 个字符用 <code>-</code> 分隔</li>
+            <li>如果提示"序列号与本机不匹配"，说明该序列号不是为你的机器生成的</li>
+        </ul>
+
+        <h2>7. 猫咪动画说明</h2>
+        <p>当连续使用时间达到阈值时，猫咪会以设置中选择的动画模式出现（默认"中央走出"）：</p>
+        <div class="step-box">
+            <h4>动画流程</h4>
+            <ol>
+                <li><strong>猫咪入场</strong> — 可选择右下角走出、中央淡入、右侧走出或中央走出（所有显示器同时出现）</li>
+                <li><strong>猫咪休息</strong> — 猫咪到达中央后躺下，循环播放休息动画</li>
+                <li><strong>倒计时显示</strong> — 屏幕底部显示休息倒计时、"再等 5 分钟"按钮和"精力充沛！"按钮</li>
+                <li><strong>猫咪退场</strong> — 倒计时结束或你手动关闭后，猫咪淡出消失</li>
+            </ol>
+        </div>
+        <p>动画使用透明背景，不会完全遮挡你的屏幕内容。</p>
+
+        <h2>8. 关闭提醒</h2>
+        <p>当猫咪出现时，你可以通过以下方式关闭：</p>
+
+        <h3>8.1 鼠标操作</h3>
+        <ul>
+            <li>点击屏幕底部的绿色"精力充沛！"按钮立即结束休息</li>
+            <li>点击"再等 5 分钟"按钮延后休息（每次提醒最多延后 2 次）</li>
+        </ul>
+
+        <h3>8.2 等待倒计时</h3>
+        <p>不做任何操作，等待倒计时自然结束，猫咪会自动消失。</p>
+
+        <h2>9. 自定义猫咪视频</h2>
+        <p>你可以用自己喜欢的动画替换默认的猫咪！</p>
+        <div class="tip">设置页选择自定义素材目录仅对已激活用户开放；试用期用户仍可手动替换默认素材目录中的同名文件。</div>
+
+        <h3>9.1 视频要求</h3>
+        <table>
+            <tr><th>属性</th><th>要求</th></tr>
+            <tr><td>格式</td><td>WebM 文件，VP9 编码</td></tr>
+            <tr><td>背景</td><td>必须透明（需要 Alpha 通道）</td></tr>
+            <tr><td>建议尺寸</td><td>200~500 像素宽高</td></tr>
+        </table>
+
+        <h3>9.2 替换步骤</h3>
+        <div class="step-box">
+            <h4>三步替换</h4>
+            <ol>
+                <li>准备两个 WebM 视频文件：走路动画（播放一次）和休息动画（循环播放）。<code>walk-zoom</code>、<code>walk-flat</code>、<code>walk-center</code> 使用两个视频；<code>fade-center</code> 只使用休息动画。</li>
+                <li>将文件放入素材目录：
+<pre><code># 使用默认文件名直接替换
+cp 你的走路动画.webm ~/.config/purr-pause/webm/cat-walk.webm
+cp 你的休息动画.webm ~/.config/purr-pause/webm/cat-rest.webm</code></pre>
+                </li>
+                <li>如果使用自定义文件名，编辑配置文件：
+<pre><code>{
+  "thresholdMinutes": 45,
+  "breakMinutes": 5,
+  "walkVideo": "my-walk.webm",
+  "idleVideo": "my-idle.webm"
+}</code></pre>
+                </li>
+            </ol>
+        </div>
+
+        <h3>9.3 素材目录位置</h3>
+<pre><code>~/.config/purr-pause/webm/</code></pre>
+        <p>首次运行后会自动创建此目录，并包含一个 <code>purr-pause-素材说明.txt</code> 说明文件。</p>
+
+        <h2>10. 智能计时说明</h2>
+        <p>胖猫暂停一下（PurrPause） 每 10 秒检测一次你的活动状态，按以下规则判断：</p>
+        <table>
+            <tr><th>条件</th><th>行为</th></tr>
+            <tr><td>动画正在显示</td><td>跳过，不检测</td></tr>
+            <tr><td>用户手动暂停监控</td><td>跳过，不检测</td></tr>
+            <tr><td>屏幕已锁定</td><td>跳过，不检测；解锁时若锁屏超过 10 分钟则计时归零</td></tr>
+            <tr><td>系统休眠后唤醒</td><td>休眠超过 10 分钟则计时归零；短时休眠继续累计</td></tr>
+            <tr><td>距上次鼠标/键盘操作 &gt; 10 分钟</td><td>计时归零（视为已休息）</td></tr>
+            <tr><td>距上次鼠标/键盘操作 &lt; 3 分钟</td><td>计时 +10 秒（视为活跃）</td></tr>
+            <tr><td>距上次鼠标/键盘操作 3~10 分钟</td><td>不累加也不归零（暂停）</td></tr>
+            <tr><td>累计活跃时间 ≥ 设定阈值</td><td>触发猫咪动画</td></tr>
+        </table>
+
+        <div class="tip">
+            <strong>这意味着：</strong>
+            <ul>
+                <li>看文档、看视频时（3 分钟内没操作）仍然会继续计时</li>
+                <li>去倒杯水（3~10 分钟）计时暂停，回来后继续累积</li>
+                <li>去吃午饭（超过 10 分钟）计时自动归零</li>
+                <li>锁屏后完全不计时；锁屏或休眠超过 10 分钟按已休息处理，计时归零</li>
+                <li>你不需要手动管理计时器</li>
+            </ul>
+        </div>
+
+        <h2>11. 常见问题 (FAQ)</h2>
+
+        <div class="faq-item">
+            <strong>Q: 猫咪一直不出现怎么办？</strong>
+            <p>请检查以下几点：</p>
+            <ol>
+                <li>确认应用正在运行（查看系统托盘是否有图标）</li>
+                <li>确认已安装 <code>xprintidle</code>：<code>sudo apt install xprintidle</code></li>
+                <li>使用"立即测试"功能验证动画是否正常</li>
+                <li>检查是否已达到设定的时间阈值</li>
+            </ol>
+        </div>
+
+        <div class="faq-item">
+            <strong>Q: 如何设置开机自启动？</strong>
+            <p>右键托盘图标 → 设置 → 勾选"开机自动启动"→ 保存。Ubuntu 下应用会写入当前用户的 <code>~/.config/autostart/purr-pause.desktop</code>；取消勾选会删除该文件。</p>
+        </div>
+
+        <div class="faq-item">
+            <strong>Q: 可以暂时禁用提醒吗？</strong>
+            <p>可以。右键托盘图标 → "暂停监控"，选择暂停时长（30 分钟 / 1 小时 / 2 小时 / 直到手动恢复）。暂停期间菜单会显示"恢复监控"选项。</p>
+        </div>
+
+        <div class="faq-item">
+            <strong>Q: 视频播放时卡顿怎么办？</strong>
+            <p>可能是 GPU 加速未正常工作。尝试：</p>
+<pre><code>/opt/purr-pause/purr-pause --enable-logging</code></pre>
+            <p>确保你的显卡驱动已正确安装。</p>
+        </div>
+
+        <div class="faq-item">
+            <strong>Q: 如何完全卸载？</strong>
+<pre><code># 卸载应用
+sudo dpkg -r purr-pause
+
+# 删除配置文件
+rm -rf ~/.config/purr-pause/
+
+# 删除自启动（如果设置过）
+rm -f ~/.config/autostart/purr-pause.desktop</code></pre>
+        </div>
+
+        <div class="faq-item">
+            <strong>Q: 支持多显示器吗？</strong>
+            <p>支持。猫咪动画会同时出现在所有显示器上。</p>
+        </div>
+
+        <div class="faq-item">
+            <strong>Q: 可以修改猫咪的大小吗？</strong>
+            <p>猫咪大小会根据屏幕宽高自动缩放，最大受屏幕高度 85% 和屏幕宽度 90% 限制，目前不支持手动调整。</p>
+        </div>
+
+        <div class="faq-item">
+            <strong>Q: 配置文件在哪里？</strong>
+            <p><code>~/.config/purr-pause/config.json</code>，你也可以通过托盘菜单的"设置"来修改。</p>
+        </div>
+
+    </div>
+</body>
+</html>

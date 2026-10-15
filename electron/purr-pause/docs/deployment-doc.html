@@ -1,0 +1,528 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>胖猫暂停一下（PurrPause） - 部署与运维文档</title>
+    <style>
+        :root {
+            --orange-50: #fff7ed;
+            --orange-100: #ffedd5;
+            --orange-200: #fed7aa;
+            --orange-300: #fdba74;
+            --orange-400: #fb923c;
+            --orange-500: #f97316;
+            --orange-600: #ea580c;
+            --orange-700: #c2410c;
+            --orange-800: #9a3412;
+            --orange-900: #7c2d12;
+            --gray-50: #f9fafb;
+            --gray-100: #f3f4f6;
+            --gray-200: #e5e7eb;
+            --gray-700: #374151;
+            --gray-800: #1f2937;
+            --gray-900: #111827;
+        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans SC", sans-serif;
+            line-height: 1.8;
+            color: var(--gray-800);
+            background: var(--gray-50);
+        }
+        .header {
+            background: linear-gradient(135deg, var(--orange-500), var(--orange-600));
+            color: white;
+            padding: 48px 32px;
+            text-align: center;
+        }
+        .header h1 { font-size: 2.2rem; margin-bottom: 8px; }
+        .header p { opacity: 0.9; font-size: 1.1rem; }
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 40px 32px;
+        }
+        h2 {
+            color: var(--orange-700);
+            font-size: 1.6rem;
+            margin-top: 48px;
+            margin-bottom: 16px;
+            padding-bottom: 8px;
+            border-bottom: 2px solid var(--orange-200);
+        }
+        h3 {
+            color: var(--orange-800);
+            font-size: 1.2rem;
+            margin-top: 32px;
+            margin-bottom: 12px;
+        }
+        h4 {
+            color: var(--gray-700);
+            font-size: 1.05rem;
+            margin-top: 24px;
+            margin-bottom: 8px;
+        }
+        p { margin-bottom: 12px; }
+        ul, ol { margin-bottom: 12px; padding-left: 24px; }
+        li { margin-bottom: 6px; }
+        code {
+            background: var(--orange-50);
+            border: 1px solid var(--orange-200);
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 0.9em;
+            font-family: "JetBrains Mono", "Fira Code", monospace;
+        }
+        pre {
+            background: var(--gray-900);
+            color: #e5e7eb;
+            padding: 20px 24px;
+            border-radius: 8px;
+            overflow-x: auto;
+            margin: 16px 0;
+            font-size: 0.88rem;
+            line-height: 1.6;
+        }
+        pre code { background: none; border: none; padding: 0; color: inherit; }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 16px 0;
+            font-size: 0.92rem;
+        }
+        th {
+            background: var(--orange-100);
+            color: var(--orange-800);
+            padding: 10px 14px;
+            text-align: left;
+            font-weight: 600;
+        }
+        td { padding: 10px 14px; border-bottom: 1px solid var(--gray-200); }
+        tr:hover td { background: var(--orange-50); }
+        .note {
+            background: var(--orange-50);
+            border-left: 4px solid var(--orange-400);
+            padding: 12px 16px;
+            margin: 16px 0;
+            border-radius: 0 8px 8px 0;
+        }
+        .warning {
+            background: #fef2f2;
+            border-left: 4px solid #ef4444;
+            padding: 12px 16px;
+            margin: 16px 0;
+            border-radius: 0 8px 8px 0;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>胖猫暂停一下（PurrPause） 部署与运维文档</h1>
+        <p>安装、配置、运维与故障排除指南</p>
+    </div>
+    <div class="container">
+
+        <h2>1. 系统要求</h2>
+        <h3>1.1 硬件要求</h3>
+        <table>
+            <tr><th>项目</th><th>最低要求</th><th>推荐配置</th></tr>
+            <tr><td>CPU</td><td>双核 x86_64</td><td>四核及以上</td></tr>
+            <tr><td>内存</td><td>512 MB 可用</td><td>1 GB 可用</td></tr>
+            <tr><td>磁盘</td><td>200 MB</td><td>500 MB</td></tr>
+            <tr><td>显卡</td><td>支持 GPU 加速</td><td>独立显卡或集成显卡均可</td></tr>
+        </table>
+
+        <h3>1.2 软件要求</h3>
+        <table>
+            <tr><th>项目</th><th>要求</th></tr>
+            <tr><td>操作系统</td><td>Ubuntu 20.04+ / Debian 11+</td></tr>
+            <tr><td>桌面环境</td><td>GNOME、KDE、XFCE 等（需 X11 或 XWayland）</td></tr>
+            <tr><td>空闲检测</td><td>xprintidle（推荐）或 GNOME Mutter</td></tr>
+        </table>
+
+        <h3>1.3 安装空闲检测工具</h3>
+<pre><code># 推荐方式（适用于所有桌面环境）
+sudo apt install xprintidle
+
+# GNOME 桌面环境自带 gdbus，无需额外安装</code></pre>
+
+        <h2>2. 安装</h2>
+        <h3>2.1 通过 .deb 包安装</h3>
+<pre><code># 下载最新版本
+wget https://github.com/purr-pause/purr-pause/releases/latest/download/purr-pause_1.4.0_amd64.deb
+
+# 安装
+sudo dpkg -i purr-pause_1.4.0_amd64.deb
+
+# 如有依赖问题
+sudo apt-get install -f</code></pre>
+        <p>使用 <code>sudo dpkg -i</code> 安装时，安装后脚本会先修正 <code>/opt/purr-pause/chrome-sandbox</code> 的所有权和权限（<code>root:root</code>、<code>4755</code>），避免 Electron 启动时报 SUID sandbox 权限错误；随后为执行 sudo 的桌面用户创建 <code>~/.config/autostart/purr-pause.desktop</code>，下次登录桌面后自动启动。</p>
+
+        <h3>2.2 验证安装</h3>
+<pre><code># 检查是否安装成功
+dpkg -l | grep purr-pause
+
+# 启动应用
+/opt/purr-pause/purr-pause</code></pre>
+
+        <h2>3. 卸载</h2>
+<pre><code># 卸载应用
+sudo dpkg -r purr-pause
+
+# 清除包级配置（用户数据仍需手动删除）
+sudo dpkg --purge purr-pause
+
+# 手动清理用户配置（可选）
+rm -rf ~/.config/purr-pause/</code></pre>
+
+        <h2>4. 配置文件</h2>
+        <h3>4.1 配置文件位置</h3>
+        <table>
+            <tr><th>文件</th><th>路径</th><th>说明</th></tr>
+            <tr><td>用户配置</td><td><code>~/.config/purr-pause/config.json</code></td><td>用户自定义设置（优先读取）</td></tr>
+            <tr><td>默认配置</td><td>应用内置 <code>config.json</code>（打包在 app.asar 中）</td><td>应用内置默认值</td></tr>
+        </table>
+
+        <h3>4.2 配置文件格式</h3>
+<pre><code>{
+  "thresholdMinutes": 45,
+  "breakMinutes": 5,
+  "animationMode": "walk-center",
+  "customWebmDir": "",
+  "walkVideo": "cat-walk.webm",
+  "idleVideo": "cat-rest.webm"
+}</code></pre>
+
+        <h3>4.3 配置项说明</h3>
+        <table>
+            <tr><th>字段</th><th>说明</th><th>默认值</th><th>有效范围</th></tr>
+            <tr><td><code>thresholdMinutes</code></td><td>连续使用多久后提醒（分钟）</td><td>45</td><td>1 ~ 480</td></tr>
+            <tr><td><code>breakMinutes</code></td><td>休息倒计时时长（分钟）</td><td>5</td><td>1 ~ 60</td></tr>
+            <tr><td><code>animationMode</code></td><td>动画模式（仅激活用户可切换）</td><td>walk-center</td><td>walk-zoom / fade-center / walk-flat / walk-center</td></tr>
+            <tr><td><code>customWebmDir</code></td><td>自定义素材目录（仅激活用户可设置）</td><td>""</td><td>有效目录路径</td></tr>
+            <tr><td><code>walkVideo</code></td><td>走路动画文件名</td><td>cat-walk.webm</td><td>有效文件名</td></tr>
+            <tr><td><code>idleVideo</code></td><td>休息动画文件名</td><td>cat-rest.webm</td><td>有效文件名</td></tr>
+        </table>
+
+        <h3>4.4 手动编辑配置</h3>
+<pre><code># 创建配置目录（首次运行后会自动创建）
+mkdir -p ~/.config/purr-pause
+
+# 编辑配置
+nano ~/.config/purr-pause/config.json</code></pre>
+        <p>手动编辑配置文件后需要重启应用才会重新读取；通过设置界面修改会立即生效。</p>
+
+        <h2>5. 自定义视频素材</h2>
+        <h3>5.1 素材目录</h3>
+<pre><code>~/.config/purr-pause/webm/</code></pre>
+        <p>首次运行后，应用会自动创建此目录并生成 <code>purr-pause-素材说明.txt</code> 说明文件。</p>
+
+        <h3>5.2 素材要求</h3>
+        <table>
+            <tr><th>属性</th><th>要求</th></tr>
+            <tr><td>格式</td><td>WebM 容器，VP9 编码</td></tr>
+            <tr><td>Alpha 通道</td><td>必须有（实现透明背景）</td></tr>
+            <tr><td>建议尺寸</td><td>200~500px 宽高</td></tr>
+            <tr><td>背景</td><td>必须透明</td></tr>
+        </table>
+
+        <h3>5.3 替换步骤</h3>
+<pre><code># 1. 准备你的 WebM 视频文件（带 Alpha 通道）
+# 2. 复制到素材目录
+cp my-cat-walk.webm ~/.config/purr-pause/webm/cat-walk.webm
+cp my-cat-rest.webm ~/.config/purr-pause/webm/cat-rest.webm
+
+# 3. 如果使用非默认文件名，编辑配置文件
+nano ~/.config/purr-pause/config.json
+# 添加 "walkVideo": "my-walk.webm", "idleVideo": "my-idle.webm"</code></pre>
+
+        <h3>5.4 使用 FFmpeg 制作透明视频</h3>
+<pre><code># 从带 Alpha 通道的 PNG 序列生成 WebM
+ffmpeg -framerate 24 -i frame_%04d.png \
+  -c:v libvpx-vp9 -pix_fmt yuva420p \
+  -b:v 1M -auto-alt-ref 0 \
+  output.webm</code></pre>
+
+        <h2>6. 自启动配置</h2>
+        <h3>6.1 使用设置页开关</h3>
+        <p>右键托盘图标 → 设置 → 勾选“开机自动启动”→ 保存。Ubuntu / GNOME / KDE 等桌面环境下，应用会写入当前用户的 <code>~/.config/autostart/purr-pause.desktop</code>；取消勾选会删除该文件。</p>
+
+        <h3>6.2 手动创建 .desktop 文件</h3>
+<pre><code># 创建自启动条目
+mkdir -p ~/.config/autostart
+
+cat &gt; ~/.config/autostart/purr-pause.desktop &lt;&lt; EOF
+[Desktop Entry]
+Type=Application
+Name=胖猫暂停一下（PurrPause）
+Comment=胖猫暂停一下 - 屏幕休息提醒
+Exec=/opt/purr-pause/purr-pause
+Icon=purr-pause
+Terminal=false
+Hidden=false
+NoDisplay=false
+X-GNOME-Autostart-enabled=true
+Categories=Utility;
+EOF</code></pre>
+
+        <h3>6.3 使用 systemd 用户服务</h3>
+<pre><code>mkdir -p ~/.config/systemd/user
+
+cat &gt; ~/.config/systemd/user/purr-pause.service &lt;&lt; EOF
+[Unit]
+Description=胖猫暂停一下（PurrPause） - 屏幕休息提醒
+After=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=/opt/purr-pause/purr-pause
+Restart=on-failure
+RestartSec=5
+Environment=DISPLAY=:0
+
+[Install]
+WantedBy=default.target
+EOF
+
+# 启用并启动
+systemctl --user enable purr-pause
+systemctl --user start purr-pause</code></pre>
+
+        <h2>7. 故障排除</h2>
+        <h3>7.1 常见问题</h3>
+
+        <h4>猫咪不出现</h4>
+        <ol>
+            <li><strong>检查空闲检测工具是否可用</strong>：
+<pre><code>xprintidle
+# 应返回一个毫秒数</code></pre>
+            </li>
+            <li><strong>检查应用是否在运行</strong>：
+<pre><code>ps aux | grep purr-pause</code></pre>
+            </li>
+            <li><strong>手动触发测试</strong>：右键点击托盘图标 → "立即测试"</li>
+        </ol>
+
+        <h4>视频不显示 / 黑色背景</h4>
+        <ul>
+            <li>确认视频文件为 WebM 格式且包含 Alpha 通道</li>
+            <li>检查 GPU 加速是否正常：
+<pre><code>/opt/purr-pause/purr-pause --enable-logging --v=1</code></pre>
+            </li>
+        </ul>
+
+        <h4>托盘图标不显示</h4>
+        <ul>
+            <li>GNOME 桌面需安装 AppIndicator 扩展：
+<pre><code>sudo apt install gnome-shell-extension-appindicator</code></pre>
+            </li>
+            <li>安装后注销并重新登录</li>
+        </ul>
+
+        <h4>设置无法保存</h4>
+        <ul>
+            <li>检查配置目录权限：
+<pre><code>ls -la ~/.config/purr-pause/
+chmod 755 ~/.config/purr-pause/
+chmod 644 ~/.config/purr-pause/config.json</code></pre>
+            </li>
+        </ul>
+
+        <h3>7.2 重置为默认设置</h3>
+<pre><code>rm ~/.config/purr-pause/config.json
+# 下次打开设置时会使用内置默认值</code></pre>
+
+        <h2>8. 日志位置</h2>
+        <p>应用日志记录在 <code>~/.config/purr-pause/logs/</code> 目录下，时间戳使用北京时间（UTC+8）。单个日志文件最大 128KB，超出后自动轮转，最多保留 5 个历史文件。</p>
+<pre><code># 通过托盘菜单"查看日志"直接打开日志文件
+
+# 或手动查看
+cat ~/.config/purr-pause/logs/purr-pause.log
+
+# 如果使用 systemd
+journalctl --user -u purr-pause -f
+
+# Electron 崩溃报告
+ls ~/.config/purr-pause/Crashpad/</code></pre>
+
+        <h2>9. 从源码构建</h2>
+        <h3>9.1 环境准备</h3>
+<pre><code># 安装 Node.js 18+
+curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
+sudo apt install -y nodejs
+
+# 验证
+node --version  # &gt;= 18.0.0
+npm --version   # &gt;= 9.0.0</code></pre>
+
+        <h3>9.2 克隆与安装依赖</h3>
+<pre><code>git clone https://github.com/purr-pause/purr-pause.git
+cd purr-pause
+npm install</code></pre>
+
+        <h3>9.3 开发运行</h3>
+<pre><code># 正常启动
+npm start
+
+# 开发模式（9 秒触发，方便测试）
+npm run dev</code></pre>
+
+        <h3>9.4 构建 Linux 包（deb / AppImage，x64 / arm64）</h3>
+<pre><code># 当前主机架构的 deb（默认）
+npm run build:linux
+
+# arm64 的 deb（x64 主机可交叉打包，无需 ARM 机器）
+npm run build:linux:arm64
+
+# AppImage（x64 / arm64）
+npm run build:appimage
+npm run build:appimage:arm64
+
+# 一次性产出全部 4 个 Linux 产物（deb + AppImage，x64 + arm64）
+npm run build:linux:all
+
+# 输出位于 dist/ 目录
+ls dist/*.deb dist/*.AppImage</code></pre>
+
+        <h3>9.5 构建其他平台</h3>
+<pre><code># macOS
+npm run build:mac
+
+# Windows（x64 + arm64）
+npm run build:win:all
+
+# 全平台
+npm run build:all</code></pre>
+
+        <h2>10. CI/CD (GitHub Actions)</h2>
+        <h3>10.1 当前工作流配置</h3>
+        <p>当前仓库的 <code>.github/workflows/build.yml</code> 会在推送 <code>v*</code> tag 时构建 Linux（deb + AppImage，x64 + arm64）、macOS 和 Windows 产物，并创建 GitHub Release：</p>
+<pre><code>name: Build &amp; Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install dependencies
+        run: npm install
+        env:
+          ELECTRON_MIRROR: https://npmmirror.com/mirrors/electron/
+
+      - name: Install build tools
+        run: sudo apt-get install -y xz-utils binutils
+
+      - name: Build deb + AppImage (x64 + arm64)
+        run: npm run build:linux:all
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: purr-pause-linux
+          path: |
+            dist/*.deb
+            dist/*.AppImage
+
+  build-mac:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Build
+        run: npm run build:mac -- --arm64 --x64
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: false
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: purr-pause-mac
+          path: dist/*.dmg
+
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Build x64 + arm64
+        run: npm run build:win:all
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: purr-pause-windows
+          path: dist/*.exe
+
+  release:
+    needs: [build-linux, build-mac, build-windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/purr-pause-linux/*
+            artifacts/purr-pause-mac/*
+            artifacts/purr-pause-windows/*
+          generate_release_notes: true</code></pre>
+
+        <h3>10.2 版本发布流程</h3>
+<pre><code># 1. 确认 package.json/package-lock.json 版本号已更新
+
+# 2. 推送标签触发构建
+git tag v1.4.0
+git push origin --tags</code></pre>
+
+        <h2>11. 数据目录总览</h2>
+        <table>
+            <tr><th>路径</th><th>内容</th></tr>
+            <tr><td><code>~/.config/purr-pause/config.json</code></td><td>用户配置</td></tr>
+            <tr><td><code>~/.config/purr-pause/webm/</code></td><td>自定义视频素材</td></tr>
+            <tr><td><code>~/.config/purr-pause/license.json</code></td><td>授权状态</td></tr>
+            <tr><td><code>~/.config/purr-pause/.install_mark</code></td><td>试用期安装标记</td></tr>
+            <tr><td><code>~/.config/purr-pause/logs/</code></td><td>应用日志</td></tr>
+            <tr><td><code>~/.config/purr-pause/Crashpad/</code></td><td>崩溃报告</td></tr>
+            <tr><td><code>~/.config/autostart/purr-pause.desktop</code></td><td>用户级自启动条目</td></tr>
+            <tr><td><code>~/.local/share/.purr-pause-mark</code></td><td>试用期辅助标记</td></tr>
+        </table>
+
+    </div>
+</body>
+</html>

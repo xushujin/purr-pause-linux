@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>计时规则说明</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: system-ui, -apple-system, sans-serif;
+            background: linear-gradient(160deg, #f4a460, #ff8c42);
+            color: #3d2200;
+            padding: 24px;
+            user-select: none;
+            overflow-x: auto;
+        }
+        h2 {
+            font-size: 1.1rem;
+            color: #fff;
+            margin-bottom: 16px;
+            text-align: center;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.9rem;
+            background: rgba(255,255,255,0.92);
+            border-radius: 10px;
+            overflow: hidden;
+            box-shadow: 0 2px 12px rgba(0,0,0,0.08);
+            min-width: 820px;
+        }
+        th {
+            background: rgba(244,164,96,0.25);
+            text-align: left;
+            padding: 10px 14px;
+            font-weight: 600;
+            color: #5a3e1b;
+            white-space: nowrap;
+        }
+        td {
+            padding: 9px 14px;
+            border-bottom: 1px solid rgba(244,164,96,0.12);
+            white-space: nowrap;
+        }
+        tr:last-child td {
+            border-bottom: none;
+        }
+        .priority {
+            color: #b87333;
+            font-weight: 600;
+            text-align: center;
+            width: 56px;
+            white-space: nowrap;
+        }
+        .note {
+            margin-top: 16px;
+            font-size: 0.78rem;
+            color: rgba(255,255,255,0.7);
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+    <h2>计时规则说明</h2>
+    <table>
+        <tr>
+            <th class="priority">优先级</th>
+            <th>条件</th>
+            <th>行为</th>
+        </tr>
+        <tr>
+            <td class="priority">1</td>
+            <td>动画正在显示</td>
+            <td>跳过，不检测；解锁时若锁屏超过 10 分钟则计时归零</td>
+        </tr>
+        <tr>
+            <td class="priority">2</td>
+            <td>用户手动暂停监控</td>
+            <td>跳过，不检测</td>
+        </tr>
+        <tr>
+            <td class="priority">3</td>
+            <td>屏幕已锁定</td>
+            <td>跳过，不检测</td>
+        </tr>
+        <tr>
+            <td class="priority">4</td>
+            <td>系统休眠后唤醒</td>
+            <td>休眠超过 10 分钟则计时归零；短时休眠继续累计</td>
+        </tr>
+        <tr>
+            <td class="priority">5</td>
+            <td>距上次鼠标/键盘操作 &gt; 10 分钟</td>
+            <td>计时归零（视为已休息）</td>
+        </tr>
+        <tr>
+            <td class="priority">6</td>
+            <td>距上次鼠标/键盘操作 &lt; 3 分钟</td>
+            <td>计时 +10 秒（视为活跃）</td>
+        </tr>
+        <tr>
+            <td class="priority">7</td>
+            <td>距上次鼠标/键盘操作 3~10 分钟</td>
+            <td>不累加也不归零（暂停）</td>
+        </tr>
+        <tr>
+            <td class="priority">8</td>
+            <td>累计活跃时间 ≥ 设定阈值</td>
+            <td>触发猫咪动画</td>
+        </tr>
+    </table>
+    <p class="note">每 10 秒检测一次，按优先级从上到下判断。</p>
+</body>
+</html>

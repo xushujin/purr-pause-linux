@@ -45,6 +45,7 @@ require_file() {
 }
 require_file data/config.json
 require_file data/README-assets.txt
+require_file data/icons/logo.png
 require_file debian/control
 require_file debian/postinst
 require_file debian/prerm
@@ -99,17 +100,33 @@ install -m 0644 data/README-assets.txt "$STAGE/usr/share/purr-pause-linux/data/"
 
 install -m 0644 debian/purr-pause-linux.desktop "$STAGE/usr/share/applications/purr-pause-linux.desktop"
 
-# 图标：优先 SVG，回退 PNG
-if [[ -f data/icons/purr-pause-linux.svg ]]; then
-  install -m 0644 data/icons/purr-pause-linux.svg "$STAGE/usr/share/icons/hicolor/scalable/apps/purr-pause-linux.svg"
-else
-  # 用 ImageMagick 或 rsvg-convert 把 logo.png 转多尺寸 png
-  if command -v convert >/dev/null 2>&1; then
-    for sz in 16 24 48 128 256 512; do
-      convert data/icons/logo.png -resize ${sz}x${sz} "$STAGE/usr/share/icons/hicolor/${sz}x${sz}/apps/purr-pause-linux.png" 2>/dev/null || true
-    done
-  fi
+# 应用图标：由**真实** logo.png 生成多尺寸 PNG 装入 hicolor 主题。
+#
+# ⚠️ 曾经这里优先安装 data/icons/purr-pause-linux.svg —— 那是早期手绘的占位图
+# （蓝底卡通猫脸），与真正的品牌图（data/icons/logo.png，胖橘猫照片）完全不是
+# 一回事。因为 `if SVG 存在` 分支先命中，真实 logo 从未进过包，
+# 用户看到的启动器图标就是那个假图标。已删除该 SVG，统一从 logo.png 生成。
+#
+# ⚠️ 别再改回"优先 SVG"：SVG 分支一旦命中，logo.png 就永远不会被使用。
+# 尺寸集合与 electron 版的 build/icons 保持一致。
+ICON_SRC="data/icons/logo.png"
+CONVERT_BIN=""
+if command -v magick >/dev/null 2>&1; then
+  CONVERT_BIN="magick"      # ImageMagick 7
+elif command -v convert >/dev/null 2>&1; then
+  CONVERT_BIN="convert"     # ImageMagick 6
 fi
+if [[ -z "$CONVERT_BIN" ]]; then
+  echo "缺少图标转换工具：需要 imagemagick（提供 convert 或 magick 命令）" >&2
+  echo "请安装：sudo apt install imagemagick" >&2
+  exit 1
+fi
+for sz in 16 24 32 48 64 128 256 512; do
+  install -d "$STAGE/usr/share/icons/hicolor/${sz}x${sz}/apps"
+  # 用 -background none 保住透明通道（logo 是透明底 PNG）
+  "$CONVERT_BIN" "$ICON_SRC" -background none -resize "${sz}x${sz}" \
+    "$STAGE/usr/share/icons/hicolor/${sz}x${sz}/apps/purr-pause-linux.png"
+done
 
 install -m 0644 debian/control "$STAGE/DEBIAN/control"
 install -m 0755 debian/postinst "$STAGE/DEBIAN/postinst"

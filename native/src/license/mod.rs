@@ -59,50 +59,92 @@ pub struct License {
     pub sig: Option<String>,
 }
 
-/// 内部 HMAC 密钥：由公钥与固定盐派生。
+/// 公钥的 PEM 文本，与 `lib/license.js` 中硬编码的那一份**逐字节相同**
+/// （含首尾 BEGIN/END 行与其中的换行，不含结尾换行）。
 ///
-/// ⚠️ 这个盐参与 license.json 的完整性签名（`_sig` 字段）计算。
-/// 一旦有用户激活过，**这个字符串就绝不能改动** —— 否则所有已发放的
-/// license.json 会校验失败，用户丢失激活状态。
+/// ⚠️ 它参与 `internal_key()` 的派生，改动会让新旧两版算出的 HMAC 密钥不一致。
+const PUBLIC_KEY_PEM: &str = "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAqxoQObh1uXH1AphIbnRj5XTQN9T+RoGk51fqNDU88HA=\n-----END PUBLIC KEY-----";
+
+/// 内部 HMAC 密钥：由「固定盐 + 完整 PEM 公钥」派生。
 ///
-/// 派生出私钥后请同步更新 `tools/keygen.js` 与`tools/sig-fixtures/fixtures.json`。
+/// ⚠️ 算法必须与 Electron 版逐字节一致：
+///     electron: sha256('purr-pause-internal-' + PUBLIC_KEY).hex[..32]
+///   其中 `PUBLIC_KEY` 是**含首尾 BEGIN/END 行的完整 PEM 字符串**。
+///
+/// 历史 bug：早期版本只哈希了盐本身、没有拼公钥（尽管注释写的是「由公钥与固定盐
+/// 派生」）。后果是两版派生出的密钥不同 —— Electron 版写下的
+/// `~/.local/share/.purr-pause-mark`（试用起算标记，两版共用同一路径）与
+/// `license.json` 的 `_sig` 在 native 版里会被判定为「被篡改」，
+/// 用户升级后丢失激活、试用期被重置。已修正为与 Electron 版一致。
+///
+/// 这个字符串参与 license.json 的完整性签名（`_sig`）与试用标记的 `sig` 计算，
+/// 一旦有用户激活过就**绝不能再改**。
 fn internal_key() -> String {
-    let digest = Sha256::digest(b"purr-pause-internal-");
+    let digest = Sha256::digest(format!("purr-pause-internal-{PUBLIC_KEY_PEM}").as_bytes());
     let full = hex::encode(digest);
     full[..32].to_string()
 }
 
-/// 生成 16 位机器码。仅 Linux：读取 /etc/machine-id。
+/// 生成 16 位机器码。**必须与 Electron 版逐字节一致**，否则老用户已发放的序列号
+/// 会报「序列号与本机不匹配」而无法激活。
+///
+/// electron（lib/license.js）：
+/// ```js
+/// parts = [os.platform(), os.arch(), os.cpus()[0].model || '']
+/// // linux: parts.push(readFileSync('/etc/machine-id').trim())
+/// // 抛异常时: parts.push(os.hostname() + os.homedir())
+/// sha256(parts.join('|')).hex.substring(0, 16)
+/// ```
+///
+/// 三处必须对齐的地方：
+/// 1. `os.platform()` 在 Linux 上是 `"linux"` —— 与 `std::env::consts::OS` 相同 ✓
+/// 2. `os.arch()` 在 x86_64 上是 **`"x64"`**，而 `std::env::consts::ARCH` 是
+///    `"x86_64"` —— **必须映射**，否则机器码不同（这是个隐蔽的不兼容点）。
+/// 3. 读不到 machine-id 时，electron 推入的是 `hostname + homedir` 拼接的**一个**
+///    字符串；且**只读 `/etc/machine-id`**（不回退 dbus 路径）。
 pub fn machine_id() -> String {
     let mut parts: Vec<String> = vec![
-        std::env::consts::OS.to_string(),
-        std::env::consts::ARCH.to_string(),
+        std::env::consts::OS.to_string(), // linux
+        node_arch(),                      // x64 / arm64 / ...
         cpu_model(),
     ];
 
-    let mid = fs::read_to_string("/etc/machine-id")
+    match fs::read_to_string("/etc/machine-id")
         .ok()
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
-        .or_else(|| fs::read_to_string("/var/lib/dbus/machine-id").ok().map(|s| s.trim().to_string()))
-        .filter(|s| !s.is_empty());
-
-    match mid {
+    {
         Some(m) => parts.push(m),
         None => {
-            // 降级：主机名 + 家目录
+            // 与 electron 的 catch 分支一致：主机名 + 家目录拼接成一个字符串
             let host = hostname();
             let home = dirs::home_dir()
                 .map(|p| p.to_string_lossy().to_string())
                 .unwrap_or_default();
-            parts.push(format!("{home}"));
-            let _ = host;
+            parts.push(format!("{host}{home}"));
         }
     }
 
     let joined = parts.join("|");
     let digest = Sha256::digest(joined.as_bytes());
     hex::encode(digest)[..16].to_string()
+}
+
+/// 把 Rust 的架构名映射成 Node `os.arch()` 的写法。
+///
+/// Electron 版用 `os.arch()`，x86_64 上是 `"x64"`；Rust 的
+/// `std::env::consts::ARCH` 则是 `"x86_64"`。两者混用会让同一台机器算出两个
+/// 不同的机器码 —— 这是最容易被忽略的兼容性陷阱。
+fn node_arch() -> String {
+    match std::env::consts::ARCH {
+        "x86_64" => "x64",
+        "aarch64" => "arm64",
+        "x86" => "ia32",
+        "powerpc64" => "ppc64",
+        "powerpc" => "ppc",
+        other => other,
+    }
+    .to_string()
 }
 
 fn cpu_model() -> String {
@@ -215,6 +257,18 @@ fn now_secs() -> i64 {
         .unwrap_or(0)
 }
 
+/// 剩余天数，与 Electron 版算法一致：
+/// `round((到期日 0 点 - 今天 0 点) / 86400000)` —— 按自然日计算，不是精确到秒。
+///
+/// 历史 bug：这里原本对试用恒返回 `TRIAL_DAYS`（永远显示「剩余 7 天」）、
+/// 对已激活恒返回 `0`（永远显示「已激活（剩余 0 天）」），是个明显的用户可见错误。
+fn days_left_until(expire_secs: i64, now: i64) -> i64 {
+    const DAY: i64 = 86400;
+    let expire_day0 = expire_secs.div_euclid(DAY) * DAY;
+    let today0 = now.div_euclid(DAY) * DAY;
+    (((expire_day0 - today0) as f64) / DAY as f64).round() as i64
+}
+
 /// 试用起算时间：双写 HMAC 标记文件，防用户删除 userData 里的标记重置试用。
 fn install_date() -> String {
     let mid = machine_id();
@@ -265,19 +319,42 @@ fn write_mark(path: &Path, payload: &str) -> std::io::Result<()> {
 }
 
 /// license.json 的 HMAC 完整性签名。
+/// 计算 license.json 的完整性签名 `_sig`。
+///
+/// ⚠️ 必须与 Electron 的 `signLicense()` **逐字节一致**：
+/// ```js
+/// JSON.stringify({installDate, serialKey, activatedAt, expiresAt,
+///                 type, machineId, usedSerials: data.usedSerials || []})
+/// ```
+/// 两个容易踩的点：
+/// 1. **键顺序**固定为上面这个顺序（不是结构体字段顺序）。
+/// 2. 值为 `undefined` 的字段在 `JSON.stringify` 里**整个键被丢掉**，
+///    而 `serde_json::json!` 会把 `Option::None` 序列化成 `"key": null`。
+///    早期版本用了后者，于是试用态的 payload 多出三个 `null` 字段、
+///    签名字符串与 Electron 版不同 —— 两版写出的 license.json 互不认账。
 fn sign_license(lic: &License) -> String {
-    let payload = serde_json::json!({
-        "installDate": lic.install_date,
-        "serialKey": lic.serial_key,
-        "activatedAt": lic.activated_at,
-        "expiresAt": lic.expires_at,
-        "type": lic.kind,
-        "machineId": lic.machine_id,
-        "usedSerials": lic.used_serials,
-    });
+    let j = |v: &str| serde_json::to_string(v).unwrap_or_else(|_| "\"\"".to_string());
+    let mut parts: Vec<String> = vec![format!("\"installDate\":{}", j(&lic.install_date))];
+    if let Some(v) = &lic.serial_key {
+        parts.push(format!("\"serialKey\":{}", j(v)));
+    }
+    if let Some(v) = &lic.activated_at {
+        parts.push(format!("\"activatedAt\":{}", j(v)));
+    }
+    if let Some(v) = &lic.expires_at {
+        parts.push(format!("\"expiresAt\":{}", j(v)));
+    }
+    parts.push(format!("\"type\":{}", j(&lic.kind)));
+    parts.push(format!("\"machineId\":{}", j(&lic.machine_id)));
+    parts.push(format!(
+        "\"usedSerials\":{}",
+        serde_json::to_string(&lic.used_serials).unwrap_or_else(|_| "[]".to_string())
+    ));
+    let payload = format!("{{{}}}", parts.join(","));
+
     let key = internal_key();
     let mut mac = HmacSha256::new_from_slice(key.as_bytes()).expect("HMAC key");
-    mac.update(serde_json::to_string(&payload).unwrap_or_default().as_bytes());
+    mac.update(payload.as_bytes());
     hex::encode(mac.finalize().into_bytes())
 }
 
@@ -471,29 +548,24 @@ pub fn check_status() -> StatusInfo {
     if lic.kind != "trial" {
         if let Some(exp) = &lic.expires_at {
             let exp_secs = parse_iso(exp).unwrap_or(0);
+            let kind = if lic.kind == "monthly" {
+                "monthly"
+            } else if lic.kind == "quarterly" {
+                "quarterly"
+            } else {
+                "yearly"
+            };
             if now < exp_secs {
                 return StatusInfo {
                     status: LicenseStatus::Active,
-                    kind: if lic.kind == "monthly" {
-                        "monthly"
-                    } else if lic.kind == "quarterly" {
-                        "quarterly"
-                    } else {
-                        "yearly"
-                    },
-                    days_left: 0,
+                    kind,
+                    days_left: days_left_until(exp_secs, now),
                     is_permanent: false,
                 };
             }
             return StatusInfo {
                 status: LicenseStatus::Expired,
-                kind: if lic.kind == "monthly" {
-                    "monthly"
-                } else if lic.kind == "quarterly" {
-                    "quarterly"
-                } else {
-                    "yearly"
-                },
+                kind,
                 days_left: 0,
                 is_permanent: false,
             };
@@ -507,7 +579,7 @@ pub fn check_status() -> StatusInfo {
                 return StatusInfo {
                     status: LicenseStatus::Trial,
                     kind: "trial",
-                    days_left: TRIAL_DAYS,
+                    days_left: days_left_until(trial_end, now),
                     is_permanent: false,
                 };
             }

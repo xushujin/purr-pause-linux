@@ -1,0 +1,87 @@
+{
+  "name": "purr-pause",
+  "version": "1.5.0",
+  "description": "胖猫暂停一下（PurrPause）- 一只胖猫提醒你适时休息",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --dev",
+    "rocket-demo": "electron . --rocket-demo",
+    "build": "electron-builder",
+    "build:linux": "electron-builder --linux deb",
+    "build:linux:arm64": "electron-builder --linux deb --arm64",
+    "build:appimage": "electron-builder --linux AppImage",
+    "build:appimage:arm64": "electron-builder --linux AppImage --arm64",
+    "build:linux:all": "electron-builder --linux deb AppImage --x64 --arm64",
+    "build:mac": "electron-builder --mac",
+    "build:win": "electron-builder --win",
+    "build:win:arm64": "electron-builder --win --arm64",
+    "build:win:all": "electron-builder --win --x64 --arm64",
+    "build:all": "electron-builder --linux deb --mac --win"
+  },
+  "author": {
+    "name": "PurrPause",
+    "email": "purr-pause@example.com"
+  },
+  "homepage": "https://github.com/purr-pause/purr-pause",
+  "license": "MIT",
+  "build": {
+    "appId": "com.purr-pause.app",
+    "productName": "purr-pause",
+    "executableName": "purr-pause",
+    "icon": "build/icons/icon",
+    "linux": {
+      "target": "deb",
+      "category": "Utility",
+      "icon": "build/icons",
+      "executableName": "purr-pause",
+      "desktop": {
+        "entry": {
+          "Name": "胖猫暂停一下",
+          "Comment": "胖猫暂停一下（PurrPause）- 一只胖猫提醒你适时休息",
+          "StartupWMClass": "purr-pause"
+        }
+      }
+    },
+    "mac": {
+      "target": "dmg",
+      "icon": "build/icons/icon.icns",
+      "category": "public.app-category.utilities"
+    },
+    "win": {
+      "target": "nsis",
+      "icon": "build/icons/icon.ico"
+    },
+    "nsis": {
+      "oneClick": true,
+      "allowToChangeInstallationDirectory": false,
+      "buildUniversalInstaller": false,
+      "artifactName": "${productName}-Setup-${version}-${arch}.${ext}"
+    },
+    "deb": {
+      "depends": [],
+      "compression": "gz",
+      "afterInstall": "scripts/postinstall.sh"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "lib/**/*",
+      "renderer/**/*",
+      "docs/message-api-spec.md",
+      "config.json",
+      "!tools"
+    ],
+    "extraResources": [
+      {
+        "from": "assets",
+        "to": "assets"
+      }
+    ]
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "electron": "33.2.1",
+    "electron-builder": "^26.0.0"
+  }
+}

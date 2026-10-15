@@ -1,0 +1,503 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>待办消息</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            min-height: 100vh;
+            font-family: system-ui, -apple-system, sans-serif;
+            background: linear-gradient(160deg, #f4a460, #ff8c42);
+            color: #3d2200;
+            padding: 20px 22px;
+            user-select: none;
+            overflow-y: auto;
+        }
+        .app {
+            min-height: calc(100vh - 40px);
+            display: flex;
+            flex-direction: column;
+        }
+        h1 {
+            font-size: 1.12rem;
+            margin-bottom: 12px;
+            color: #fff;
+            text-shadow: 0 1px 2px rgba(0,0,0,0.15);
+        }
+        header {
+            background: rgba(255,255,255,0.92);
+            border-radius: 12px;
+            padding: 14px 18px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+        .topline {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+        }
+        .count {
+            color: #3d2200;
+            font-size: 1rem;
+            font-weight: 700;
+        }
+        button {
+            padding: 7px 22px;
+            border: none;
+            border-radius: 8px;
+            font-size: 0.88rem;
+            cursor: pointer;
+            transition: transform 0.15s;
+            background: #fff;
+            color: #e07b20;
+            font-weight: 700;
+            box-shadow: 0 2px 6px rgba(0,0,0,0.1);
+            border: 1px solid rgba(224,123,32,0.3);
+        }
+        button:active { transform: scale(0.97); }
+        button:disabled {
+            cursor: not-allowed;
+            opacity: 0.5;
+            transform: none;
+        }
+        .meta {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+            margin-top: 8px;
+            color: #8b5e34;
+            font-size: 0.76rem;
+        }
+        .error {
+            color: #dc2626;
+            max-width: 62%;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            text-align: right;
+        }
+        /* 来源 chips —— 横向滚动 */
+        .chips {
+            display: flex;
+            gap: 8px;
+            margin-top: 12px;
+            padding-bottom: 4px;
+            overflow-x: auto;
+            overflow-y: hidden;
+            scrollbar-width: thin;
+            scrollbar-color: rgba(224,123,32,0.45) transparent;
+        }
+        .chips::-webkit-scrollbar { height: 6px; }
+        .chips::-webkit-scrollbar-thumb {
+            background: rgba(224,123,32,0.4);
+            border-radius: 999px;
+        }
+        .chip {
+            flex: 0 0 auto;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 5px 12px;
+            border-radius: 999px;
+            font-size: 0.8rem;
+            font-weight: 700;
+            cursor: pointer;
+            white-space: nowrap;
+            background: rgba(255,255,255,0.85);
+            border: 1.5px solid rgba(244,164,96,0.5);
+            color: #6b3a00;
+            outline: none;
+            transition: transform 0.12s;
+        }
+        .chip:active { transform: scale(0.96); }
+        .chip:focus-visible {
+            box-shadow: 0 0 0 3px rgba(244,164,96,0.35);
+        }
+        .chip .badge {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            min-width: 18px;
+            height: 18px;
+            padding: 0 5px;
+            border-radius: 999px;
+            background: rgba(61,34,0,0.14);
+            color: #6b3a00;
+            font-size: 0.7rem;
+            font-weight: 700;
+        }
+        .chip.active {
+            color: #fff;
+        }
+        .chip.active .badge {
+            background: rgba(255,255,255,0.32);
+            color: #fff;
+        }
+        .chip .dot {
+            width: 7px;
+            height: 7px;
+            border-radius: 50%;
+            flex: 0 0 auto;
+        }
+        .chip.err::after {
+            content: '!';
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 15px;
+            height: 15px;
+            border-radius: 50%;
+            background: #dc2626;
+            color: #fff;
+            font-size: 0.66rem;
+            font-weight: 700;
+        }
+        main {
+            flex: 1;
+            overflow: auto;
+            margin-top: 12px;
+            background: rgba(255,255,255,0.92);
+            border-radius: 12px;
+            padding: 14px 18px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+        .notice {
+            margin: 0 0 10px;
+            padding: 8px 10px;
+            border: 1px solid rgba(244,164,96,0.38);
+            background: rgba(255, 250, 245, 0.9);
+            border-radius: 8px;
+            color: #8b5e34;
+            font-size: 0.8rem;
+        }
+        .notice.warn {
+            border-color: rgba(220,38,38,0.4);
+            background: rgba(255,245,243,0.95);
+            color: #b3261e;
+        }
+        .list {
+            display: flex;
+            flex-direction: column;
+            gap: 7px;
+        }
+        .item {
+            display: grid;
+            grid-template-columns: 1fr auto;
+            gap: 5px 12px;
+            padding: 10px 12px;
+            background: #ffffff;
+            border: 1px solid rgba(244,164,96,0.34);
+            border-radius: 8px;
+            cursor: pointer;
+            outline: none;
+        }
+        .item:hover,
+        .item:focus {
+            border-color: #e07b20;
+            box-shadow: 0 0 0 3px rgba(244,164,96,0.2);
+        }
+        .title {
+            min-width: 0;
+            color: #3d2200;
+            font-size: 0.92rem;
+            font-weight: 700;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .summary {
+            grid-column: 1 / -1;
+            color: #8b5e34;
+            font-size: 0.81rem;
+            line-height: 1.4;
+            display: -webkit-box;
+            -webkit-line-clamp: 2;
+            -webkit-box-orient: vertical;
+            overflow: hidden;
+            user-select: text;
+        }
+        .tag {
+            max-width: 140px;
+            align-self: start;
+            border-radius: 999px;
+            padding: 2px 9px;
+            color: #ffffff;
+            font-size: 0.72rem;
+            font-weight: 700;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            text-shadow: 0 1px 1px rgba(0,0,0,0.18);
+        }
+        .foot {
+            grid-column: 1 / -1;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            color: #8b5e34;
+            font-size: 0.73rem;
+            min-width: 0;
+        }
+        .level {
+            text-transform: uppercase;
+            color: #6b3a00;
+            font-weight: 700;
+            letter-spacing: 0.03em;
+        }
+        .foot .time {
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .empty {
+            min-height: 200px;
+            display: grid;
+            place-items: center;
+            color: #8b5e34;
+            text-align: center;
+            font-size: 0.9rem;
+        }
+    </style>
+</head>
+<body>
+    <div class="app">
+        <h1>待办消息</h1>
+        <header>
+            <div class="topline">
+                <div class="count" id="countText">待办消息（0）</div>
+                <button id="refreshBtn">刷新</button>
+            </div>
+            <div class="meta">
+                <span id="refreshText">尚未刷新</span>
+                <span class="error" id="errorText"></span>
+            </div>
+            <div class="chips" id="chips"></div>
+        </header>
+        <main>
+            <p class="notice" id="notice" hidden></p>
+            <div class="list" id="list"></div>
+            <div class="empty" id="empty">暂无待办消息</div>
+        </main>
+    </div>
+
+    <script>
+        const countText = document.getElementById('countText');
+        const refreshText = document.getElementById('refreshText');
+        const errorText = document.getElementById('errorText');
+        const refreshBtn = document.getElementById('refreshBtn');
+        const chipsBox = document.getElementById('chips');
+        const notice = document.getElementById('notice');
+        const list = document.getElementById('list');
+        const empty = document.getElementById('empty');
+
+        // 当前来源筛选：'all' 或某 source.id。在多次 onMessagesState 更新间保留。
+        let currentFilter = 'all';
+        // 缓存最近一次 state，便于 chip 点击后用同一份数据重渲染。
+        let lastState = null;
+
+        function formatTime(value) {
+            if (!value) return '尚未刷新';
+            const date = new Date(value);
+            if (Number.isNaN(date.getTime())) return '尚未刷新';
+            return '最后刷新 ' + date.toLocaleString('zh-CN', { hour12: false });
+        }
+
+        function safeColor(value, fallback) {
+            return /^#[0-9a-fA-F]{6}$/.test(value || '') ? value : (fallback || '#8b5e34');
+        }
+
+        function appendText(parent, className, text) {
+            const el = document.createElement('div');
+            el.className = className;
+            el.textContent = text;
+            parent.appendChild(el);
+            return el;
+        }
+
+        // ---- 来源 chips ----
+        function makeChip(opts) {
+            // opts: { key, label, color, badge, active, error }
+            const chip = document.createElement('button');
+            chip.type = 'button';
+            chip.className = 'chip' + (opts.active ? ' active' : '') + (opts.error ? ' err' : '');
+            chip.dataset.key = opts.key;
+            chip.setAttribute('aria-pressed', opts.active ? 'true' : 'false');
+
+            const color = safeColor(opts.color, '#e07b20');
+            if (opts.active) {
+                chip.style.backgroundColor = color;
+                chip.style.borderColor = color;
+            } else {
+                chip.style.backgroundColor = 'rgba(255,255,255,0.85)';
+                // 用源色做描边，保证颜色稳定可辨识。
+                chip.style.borderColor = color;
+                const dot = document.createElement('span');
+                dot.className = 'dot';
+                dot.style.backgroundColor = color;
+                chip.appendChild(dot);
+            }
+
+            const label = document.createElement('span');
+            label.textContent = opts.label;
+            chip.appendChild(label);
+
+            if (opts.badge != null && opts.badge > 0) {
+                const b = document.createElement('span');
+                b.className = 'badge';
+                b.textContent = opts.badge > 99 ? '99+' : String(opts.badge);
+                chip.appendChild(b);
+            }
+
+            chip.addEventListener('click', () => {
+                currentFilter = opts.key;
+                if (lastState) render(lastState);
+            });
+            return chip;
+        }
+
+        function renderChips(state) {
+            const sources = Array.isArray(state.sources) ? state.sources : [];
+            chipsBox.replaceChildren();
+
+            // 「全部」chip：徽标用聚合角标。
+            chipsBox.appendChild(makeChip({
+                key: 'all',
+                label: '全部',
+                color: '#e07b20',
+                badge: state.badgeCount || 0,
+                active: currentFilter === 'all',
+                error: false
+            }));
+
+            for (const src of sources) {
+                // chip 徽标优先显示角标，没有角标则显示条目数。
+                const badge = src.badgeCount > 0 ? src.badgeCount : (src.itemCount || 0);
+                chipsBox.appendChild(makeChip({
+                    key: src.id,
+                    label: src.name || '未命名',
+                    color: src.color,
+                    badge: badge,
+                    active: currentFilter === src.id,
+                    error: !!src.lastError
+                }));
+            }
+        }
+
+        // ---- 单条 item ----
+        function renderItem(item) {
+            const row = document.createElement('div');
+            row.className = 'item';
+            row.tabIndex = 0;
+            row.dataset.uid = item.uid || item.id || '';
+
+            appendText(row, 'title', item.title || '未命名待办');
+
+            // tag 一律用 item.origin（客户端配置的源），颜色稳定。
+            const origin = item.origin || {};
+            const tag = appendText(row, 'tag', origin.name || '未知来源');
+            tag.style.backgroundColor = safeColor(origin.color, '#8b5e34');
+
+            if (item.summary) appendText(row, 'summary', item.summary);
+
+            const foot = document.createElement('div');
+            foot.className = 'foot';
+            const level = document.createElement('span');
+            level.className = 'level';
+            level.textContent = item.level || 'normal';
+            foot.appendChild(level);
+            const timeText = item.createdAt || '';
+            if (timeText) {
+                const time = document.createElement('span');
+                time.className = 'time';
+                time.textContent = timeText;
+                foot.appendChild(time);
+            }
+            row.appendChild(foot);
+
+            const open = () => window.electronAPI.openMessageTarget(item.uid || item.id);
+            row.addEventListener('click', open);
+            row.addEventListener('keydown', (event) => {
+                if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault();
+                    open();
+                }
+            });
+
+            return row;
+        }
+
+        // ---- 主渲染 ----
+        function render(state) {
+            lastState = state;
+
+            // 若当前筛选的源已不存在，回退「全部」。
+            if (currentFilter !== 'all') {
+                const sources = Array.isArray(state.sources) ? state.sources : [];
+                const exists = sources.some((s) => s.id === currentFilter);
+                if (!exists) currentFilter = 'all';
+            }
+
+            // 顶部聚合头：展示本地保留条数（与托盘角标一致），不回退服务端 total。
+            countText.textContent = `待办消息（${state.badgeCount || state.itemCount || 0}）`;
+            refreshText.textContent = state.loading ? '正在刷新...' : formatTime(state.lastRefreshAt);
+            errorText.textContent = state.lastError || '';
+            errorText.title = state.lastError || '';
+            refreshBtn.disabled = !!state.loading || !state.enabled || !state.configured;
+
+            renderChips(state);
+
+            // notice / 错误分支
+            notice.hidden = true;
+            notice.textContent = '';
+            notice.classList.remove('warn');
+            if (!state.enabled) {
+                notice.hidden = false;
+                notice.textContent = '消息提醒未启用';
+            } else if (!state.configured) {
+                notice.hidden = false;
+                notice.textContent = '未配置任何启用的消息源';
+            } else if (state.backoff) {
+                notice.hidden = false;
+                notice.classList.add('warn');
+                notice.textContent = '最近同步失败，已降低轮询频率'
+                    + (state.lastError ? '（' + state.lastError + '）' : '');
+            } else if (state.lastError) {
+                notice.hidden = false;
+                notice.classList.add('warn');
+                notice.textContent = state.lastError;
+            } else if (currentFilter === 'all' && state.hiddenCount > 0) {
+                notice.hidden = false;
+                notice.textContent = `仅显示每个来源最近 ${state.maxCacheItems || 30} 条`;
+            }
+
+            // 按当前筛选过滤 items（筛选用 item.origin.id）
+            const allItems = Array.isArray(state.items) ? state.items : [];
+            const items = currentFilter === 'all'
+                ? allItems
+                : allItems.filter((i) => i.origin && i.origin.id === currentFilter);
+
+            list.replaceChildren();
+            for (const item of items) list.appendChild(renderItem(item));
+
+            empty.hidden = items.length > 0;
+            if (items.length === 0) {
+                if (currentFilter !== 'all') {
+                    empty.textContent = '该来源暂无待办消息';
+                } else {
+                    empty.textContent = '暂无待办消息';
+                }
+            }
+        }
+
+        refreshBtn.addEventListener('click', () => {
+            window.electronAPI.refreshMessages();
+        });
+
+        window.electronAPI.onMessagesState(render);
+        window.electronAPI.refreshMessages();
+    </script>
+</body>
+</html>

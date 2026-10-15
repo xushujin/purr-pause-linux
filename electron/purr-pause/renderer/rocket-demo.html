@@ -1,0 +1,370 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>小火箭提醒演示</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        html,
+        body {
+            width: 100vw;
+            height: 100vh;
+            overflow: hidden;
+            background: transparent;
+            pointer-events: none;
+            user-select: none;
+        }
+
+        .stage {
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, 0);
+            contain: layout style paint;
+            isolation: isolate;
+        }
+
+        .rocket-art {
+            position: absolute;
+            left: 0;
+            top: var(--rocket-start-y, 0px);
+            width: 240px;
+            height: 240px;
+            transform-origin: center center;
+            will-change: transform, opacity;
+            animation: rocket-flight var(--rocket-duration, 7000ms) cubic-bezier(0.2, 0.82, 0.18, 1) both;
+        }
+
+        .rocket-scene {
+            position: absolute;
+            inset: 0;
+            width: 240px;
+            height: 240px;
+            overflow: visible;
+        }
+
+        .rocket-media {
+            position: absolute;
+            inset: 0;
+            width: 240px;
+            height: 240px;
+            display: none;
+            object-fit: contain;
+        }
+
+        .stage.media-mode .rocket-media {
+            display: block;
+        }
+
+        .stage.media-mode .rocket-scene {
+            display: none;
+        }
+
+        .rocket-group {
+            transform-origin: 120px 42px;
+            animation: rocket-boost 7000ms cubic-bezier(0.2, 0.82, 0.18, 1) both;
+        }
+
+        .rocket-shadow {
+            opacity: 1;
+        }
+
+        .badge-text {
+            font: 900 14px/1 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            color: #ff3d57;
+            position: absolute;
+            left: 145px;
+            top: 34px;
+            min-width: 10px;
+            text-align: center;
+            transform: translate(-50%, -50%);
+            -webkit-text-stroke: 3px rgba(255, 255, 255, 0.94);
+            paint-order: stroke;
+            text-shadow: 0 2px 5px rgba(20, 25, 38, 0.28);
+            animation: badge-pop 720ms cubic-bezier(0.2, 1.25, 0.3, 1) 120ms both;
+        }
+
+        .rocket-label {
+            fill: #d9fbff;
+            font: 800 11px/1 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            dominant-baseline: middle;
+            text-anchor: middle;
+            paint-order: stroke;
+            stroke: rgba(19, 36, 54, 0.78);
+            stroke-width: 2px;
+            stroke-linejoin: round;
+        }
+
+        .soft-glow {
+            animation: tech-glow 1400ms ease-in-out infinite alternate;
+        }
+
+        .outer-flame {
+            transform-origin: 120px 187px;
+            animation: outer-flame 120ms ease-in-out infinite alternate;
+        }
+
+        .middle-flame {
+            transform-origin: 120px 188px;
+            animation: middle-flame 92ms ease-in-out infinite alternate;
+        }
+
+        .inner-flame {
+            transform-origin: 120px 189px;
+            animation: inner-flame 70ms ease-in-out infinite alternate;
+        }
+
+        .flame-halo {
+            transform-origin: 120px 205px;
+            animation: flame-halo 160ms ease-in-out infinite alternate;
+        }
+
+        .core-jet {
+            transform-origin: 120px 188px;
+            animation: core-jet 76ms ease-in-out infinite alternate;
+        }
+
+        .spark {
+            transform-origin: center;
+            animation: spark-fall var(--duration) linear infinite;
+            animation-delay: var(--delay);
+            opacity: 0;
+        }
+
+        @keyframes rocket-flight {
+            0% {
+                opacity: 0;
+                transform: translate3d(0, 12px, 0) scale(0.66);
+            }
+            8% {
+                opacity: 1;
+                transform: translate3d(0, 0, 0) scale(0.7);
+            }
+            82% {
+                opacity: 1;
+                transform: translate3d(0, calc(var(--rocket-end-y, 0px) - var(--rocket-start-y, 0px)), 0) scale(0.7);
+            }
+            100% {
+                opacity: 0;
+                transform: translate3d(0, calc(var(--rocket-end-y, 0px) - var(--rocket-start-y, 0px) - 16px), 0) scale(0.68);
+            }
+        }
+
+        @keyframes rocket-boost {
+            0% { transform: scale(0.92); }
+            52% { transform: scale(1.035); }
+            100% { transform: scale(0.99); }
+        }
+
+        @keyframes badge-pop {
+            0% { transform: translate(-50%, -50%) translateY(8px) scale(0.2); opacity: 0; }
+            58% { transform: translate(-50%, -50%) translateY(0) scale(1.12); opacity: 1; }
+            100% { transform: translate(-50%, -50%) translateY(0) scale(1); opacity: 1; }
+        }
+
+        @keyframes tech-glow {
+            from { opacity: 0.66; }
+            to { opacity: 1; }
+        }
+
+        @keyframes outer-flame {
+            from { transform: scaleX(1.08) scaleY(0.92); opacity: 0.88; }
+            to { transform: scaleX(0.96) scaleY(1.18); opacity: 1; }
+        }
+
+        @keyframes middle-flame {
+            from { transform: scaleX(0.9) scaleY(1.1) translateY(-1px); }
+            to { transform: scaleX(1.08) scaleY(0.92) translateY(2px); }
+        }
+
+        @keyframes inner-flame {
+            from { transform: scaleX(1) scaleY(0.84); opacity: 0.78; }
+            to { transform: scaleX(0.84) scaleY(1.08); opacity: 1; }
+        }
+
+        @keyframes flame-halo {
+            from { transform: scaleX(0.92) scaleY(0.94); opacity: 0.34; }
+            to { transform: scaleX(1.08) scaleY(1.06); opacity: 0.56; }
+        }
+
+        @keyframes core-jet {
+            from { transform: scaleX(0.9) scaleY(1.04); opacity: 0.9; }
+            to { transform: scaleX(1.12) scaleY(0.96); opacity: 1; }
+        }
+
+        @keyframes spark-fall {
+            0% { transform: translateY(-8px) scale(0.22); opacity: 0; }
+            14% { opacity: 0.94; }
+            100% { transform: translateY(52px) scale(1.36); opacity: 0; }
+        }
+
+    </style>
+</head>
+<body>
+    <div class="stage" aria-hidden="true">
+        <div class="rocket-art">
+        <video class="rocket-media" id="rocketMedia" muted playsinline autoplay loop></video>
+        <svg class="rocket-scene" viewBox="0 0 240 240" role="img" aria-label="rocket notification">
+            <defs>
+                <linearGradient id="noseGradient" x1="92" y1="29" x2="148" y2="96" gradientUnits="userSpaceOnUse">
+                    <stop offset="0" stop-color="#26334a"/>
+                    <stop offset="0.48" stop-color="#0b1322"/>
+                    <stop offset="1" stop-color="#050810"/>
+                </linearGradient>
+                <linearGradient id="noseGlassGradient" x1="108" y1="40" x2="132" y2="83" gradientUnits="userSpaceOnUse">
+                    <stop offset="0" stop-color="#7ee7ff" stop-opacity="0.54"/>
+                    <stop offset="1" stop-color="#234862" stop-opacity="0.46"/>
+                </linearGradient>
+                <linearGradient id="bodyGradient" x1="89" y1="82" x2="151" y2="188" gradientUnits="userSpaceOnUse">
+                    <stop offset="0" stop-color="#dce4ef"/>
+                    <stop offset="0.34" stop-color="#737d8e"/>
+                    <stop offset="0.68" stop-color="#202a39"/>
+                    <stop offset="1" stop-color="#0a101c"/>
+                </linearGradient>
+                <linearGradient id="sideHighlight" x1="90" y1="91" x2="110" y2="184" gradientUnits="userSpaceOnUse">
+                    <stop offset="0" stop-color="#ffffff" stop-opacity="0.82"/>
+                    <stop offset="0.5" stop-color="#e6eef9" stop-opacity="0.46"/>
+                    <stop offset="1" stop-color="#ffffff" stop-opacity="0.12"/>
+                </linearGradient>
+                <linearGradient id="finGradient" x1="78" y1="146" x2="162" y2="206" gradientUnits="userSpaceOnUse">
+                    <stop offset="0" stop-color="#252b3a"/>
+                    <stop offset="0.56" stop-color="#101723"/>
+                    <stop offset="1" stop-color="#060911"/>
+                </linearGradient>
+                <linearGradient id="finGlowGradient" x1="86" y1="185" x2="154" y2="185" gradientUnits="userSpaceOnUse">
+                    <stop offset="0" stop-color="#35a8ff"/>
+                    <stop offset="1" stop-color="#8b58ff"/>
+                </linearGradient>
+                <radialGradient id="windowGradient" cx="112" cy="104" r="24" gradientUnits="userSpaceOnUse">
+                    <stop offset="0" stop-color="#ffffff"/>
+                    <stop offset="0.24" stop-color="#bff8ff"/>
+                    <stop offset="0.58" stop-color="#48c7ff"/>
+                    <stop offset="1" stop-color="#155a9e"/>
+                </radialGradient>
+                <linearGradient id="panelGradient" x1="106" y1="126" x2="134" y2="177" gradientUnits="userSpaceOnUse">
+                    <stop offset="0" stop-color="#1d2c3d"/>
+                    <stop offset="0.5" stop-color="#0d1723"/>
+                    <stop offset="1" stop-color="#101928"/>
+                </linearGradient>
+                <radialGradient id="flameHaloGradient" cx="50%" cy="34%" r="62%">
+                    <stop offset="0" stop-color="#fff7a0" stop-opacity="0.62"/>
+                    <stop offset="0.36" stop-color="#ff8a18" stop-opacity="0.36"/>
+                    <stop offset="0.72" stop-color="#ff3d16" stop-opacity="0.2"/>
+                    <stop offset="1" stop-color="#ff3d16" stop-opacity="0"/>
+                </radialGradient>
+                <linearGradient id="outerFlameGradient" x1="52" y1="184" x2="188" y2="240" gradientUnits="userSpaceOnUse">
+                    <stop offset="0" stop-color="#fff7a0"/>
+                    <stop offset="0.22" stop-color="#ffc342"/>
+                    <stop offset="0.58" stop-color="#ff7a1a"/>
+                    <stop offset="1" stop-color="#df3519" stop-opacity="0"/>
+                </linearGradient>
+                <linearGradient id="middleFlameGradient" x1="82" y1="187" x2="158" y2="240" gradientUnits="userSpaceOnUse">
+                    <stop offset="0" stop-color="#ffffff"/>
+                    <stop offset="0.38" stop-color="#fff36f"/>
+                    <stop offset="0.78" stop-color="#ffb12b"/>
+                    <stop offset="1" stop-color="#ff8a18" stop-opacity="0"/>
+                </linearGradient>
+                <linearGradient id="innerFlameGradient" x1="101" y1="189" x2="139" y2="240" gradientUnits="userSpaceOnUse">
+                    <stop offset="0" stop-color="#ffffff"/>
+                    <stop offset="0.5" stop-color="#fffbd0"/>
+                    <stop offset="1" stop-color="#ffd448" stop-opacity="0"/>
+                </linearGradient>
+            </defs>
+
+            <g class="rocket-group rocket-shadow">
+                <g class="flames">
+                    <ellipse class="flame-halo" cx="120" cy="217" rx="66" ry="31" fill="url(#flameHaloGradient)"/>
+                    <path class="outer-flame" d="M120 183 C97 198 67 207 56 240 C80 232 95 238 112 240 C116 232 119 212 120 190 C122 212 124 232 129 240 C146 238 160 232 184 240 C173 207 143 198 120 183Z" fill="url(#outerFlameGradient)"/>
+                    <path class="middle-flame" d="M120 187 C103 200 85 214 77 240 C99 232 110 235 120 240 C130 235 141 232 163 240 C155 214 137 200 120 187Z" fill="url(#middleFlameGradient)"/>
+                    <path class="inner-flame" d="M120 188 C110 205 106 226 111 240 H129 C134 226 130 205 120 188Z" fill="url(#innerFlameGradient)"/>
+                    <path class="core-jet" d="M116 192 C118 207 118 228 115 240 H125 C122 228 122 207 124 192 C122 198 121 200 120 189 C119 200 118 198 116 192Z" fill="#fffef2" opacity="0.92"/>
+                </g>
+
+                <g class="exhaust">
+                    <circle class="spark" style="--duration:650ms;--delay:40ms" cx="72" cy="216" r="3.5" fill="#ff6a16"/>
+                    <circle class="spark" style="--duration:760ms;--delay:150ms" cx="101" cy="213" r="3" fill="#ffd75f"/>
+                    <circle class="spark" style="--duration:680ms;--delay:270ms" cx="123" cy="225" r="4" fill="#ff4d17"/>
+                    <circle class="spark" style="--duration:820ms;--delay:390ms" cx="147" cy="215" r="3" fill="#ffb12b"/>
+                    <circle class="spark" style="--duration:720ms;--delay:480ms" cx="52" cy="229" r="3" fill="#ff3d16"/>
+                    <circle class="spark" style="--duration:790ms;--delay:560ms" cx="188" cy="229" r="3" fill="#ff3d16"/>
+                </g>
+
+                <g class="rocket-body">
+                    <path d="M120 29 C101 42 93 65 91 92 C98 101 142 101 149 92 C147 65 139 42 120 29Z" fill="url(#noseGradient)" stroke="#050914" stroke-width="4" stroke-linejoin="round"/>
+                    <path d="M108 42 C114 37 126 37 132 42 C132 57 128 76 120 84 C112 76 108 57 108 42Z" fill="url(#noseGlassGradient)" opacity="0.68"/>
+                    <path class="soft-glow" d="M108 91 C113 95 127 95 133 91" fill="none" stroke="#88f7ff" stroke-width="4" stroke-linecap="round"/>
+
+                    <path d="M94 90 C85 122 90 162 104 185 C111 190 129 190 136 185 C150 162 155 122 146 90 C136 99 104 99 94 90Z" fill="url(#bodyGradient)" stroke="#07101c" stroke-width="4" stroke-linejoin="round"/>
+                    <path d="M100 99 C92 128 96 158 109 180" fill="none" stroke="url(#sideHighlight)" stroke-width="10" stroke-linecap="round" opacity="0.72"/>
+                    <path d="M140 99 C148 128 144 158 131 180" fill="none" stroke="#050914" stroke-width="7" stroke-linecap="round" opacity="0.64"/>
+
+                    <path d="M103 150 C90 160 81 181 80 203 C95 198 106 181 110 166Z" fill="url(#finGradient)" stroke="#050914" stroke-width="4" stroke-linejoin="round"/>
+                    <path d="M137 150 C150 160 159 181 160 203 C145 198 134 181 130 166Z" fill="url(#finGradient)" stroke="#050914" stroke-width="4" stroke-linejoin="round"/>
+                    <path class="soft-glow" d="M90 193 C97 188 103 179 106 170" fill="none" stroke="url(#finGlowGradient)" stroke-width="3" stroke-linecap="round"/>
+                    <path class="soft-glow" d="M150 193 C143 188 137 179 134 170" fill="none" stroke="url(#finGlowGradient)" stroke-width="3" stroke-linecap="round"/>
+
+                    <circle cx="120" cy="113" r="21" fill="#07101c"/>
+                    <circle cx="120" cy="113" r="16" fill="url(#windowGradient)" stroke="#e5fbff" stroke-width="4"/>
+                    <circle cx="114" cy="106" r="5" fill="rgba(255,255,255,0.92)"/>
+                    <path d="M112 122 C117 126 126 125 132 119" fill="none" stroke="rgba(255,255,255,0.54)" stroke-width="2" stroke-linecap="round"/>
+
+                    <path class="soft-glow" d="M98 128 V148 M142 128 V148" stroke="#63ebff" stroke-width="3" stroke-linecap="round"/>
+                    <path class="soft-glow" d="M103 137 L111 145 M137 137 L129 145" stroke="#63ebff" stroke-width="3" stroke-linecap="round"/>
+                    <rect x="104" y="137" width="32" height="45" rx="9" fill="url(#panelGradient)" stroke="#6aefff" stroke-width="2" opacity="0.96"/>
+                    <text id="rocketLabel" class="rocket-label" x="120" y="149"></text>
+                    <path class="soft-glow" d="M101 190 C110 195 130 195 139 190" fill="none" stroke="#9afcff" stroke-width="4" stroke-linecap="round"/>
+                    <rect x="93" y="185" width="54" height="19" rx="10" fill="#1a1412" stroke="#07101c" stroke-width="3"/>
+                    <rect x="105" y="190" width="30" height="7" rx="4" fill="#d6c4bd" opacity="0.74"/>
+                </g>
+            </g>
+        </svg>
+        <span id="rocketBadge" class="badge-text">3</span>
+        </div>
+    </div>
+    <script>
+        const params = new URLSearchParams(window.location.search);
+        const label = params.get('label') || '绘家科技';
+        const count = params.get('count') || '3';
+        const mediaUrl = params.get('mediaUrl') || '';
+        const startY = Math.max(0, Number.parseInt(params.get('startY') || '0', 10) || 0);
+        const endY = Math.max(0, Number.parseInt(params.get('endY') || '0', 10) || 0);
+        const durationMs = Math.max(1000, Number.parseInt(params.get('durationMs') || '7000', 10) || 7000);
+        const stage = document.querySelector('.stage');
+        const media = document.getElementById('rocketMedia');
+        const labelEl = document.getElementById('rocketLabel');
+        document.documentElement.style.setProperty('--rocket-start-y', `${startY}px`);
+        document.documentElement.style.setProperty('--rocket-end-y', `${endY}px`);
+        document.documentElement.style.setProperty('--rocket-duration', `${durationMs}ms`);
+        const chars = Array.from(label).slice(0, 6);
+        const lineGap = chars.length > 4 ? 9 : 10.5;
+        const labelStartY = 149 + (4 - chars.length) * 2;
+        labelEl.textContent = '';
+        labelEl.style.fontSize = (chars.length > 4 ? 9 : 11) + 'px';
+        chars.forEach((char, index) => {
+            const tspan = document.createElementNS('http://www.w3.org/2000/svg', 'tspan');
+            tspan.setAttribute('x', '120');
+            tspan.setAttribute('y', String(labelStartY + index * lineGap));
+            tspan.textContent = char;
+            labelEl.appendChild(tspan);
+        });
+        document.getElementById('rocketBadge').textContent = count;
+
+        if (mediaUrl) {
+            media.src = mediaUrl;
+            media.addEventListener('canplay', () => {
+                stage.classList.add('media-mode');
+                media.play().catch(() => {});
+            }, { once: true });
+            media.addEventListener('error', () => {
+                stage.classList.remove('media-mode');
+                media.removeAttribute('src');
+            }, { once: true });
+        }
+    </script>
+</body>
+</html>

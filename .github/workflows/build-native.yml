@@ -158,13 +158,24 @@ jobs:
             usr/bin/purr-pause-linux \
             usr/share/purr-pause-linux/config.json \
             usr/share/applications/purr-pause-linux.desktop \
-            usr/share/icons/hicolor/scalable/apps/purr-pause-linux.svg ; do
+            usr/share/icons/hicolor/256x256/apps/purr-pause-linux.png \
+            usr/share/icons/hicolor/512x512/apps/purr-pause-linux.png ; do
             if echo "$contents" | grep -q "$f"; then
               echo "  OK  $f"
             else
               echo "缺少文件: $f"; exit 1
             fi
           done
+          # 图标必须是真实 logo 转出来的多尺寸 PNG（历史 bug：曾把占位 SVG 当图标）
+          n_icons="$(echo "$contents" | grep -c 'usr/share/icons/hicolor/.*/apps/purr-pause-linux\.png$' || true)"
+          echo "  OK  $n_icons 个尺寸的应用图标"
+          if [ "$n_icons" -lt 6 ]; then
+            echo "::error::应用图标尺寸不足（$n_icons 个，期望 ≥6）"; exit 1
+          fi
+          # 占位 SVG 不应再出现在包里
+          if echo "$contents" | grep -q 'purr-pause-linux\.svg'; then
+            echo "::error::包里仍有占位 SVG 图标（应只用 logo.png 生成的 PNG）"; exit 1
+          fi
 
           # 4) 内置 webm 素材必须打进包（否则猫咪动画不可用）
           n="$(echo "$contents" | grep -c '\.webm$' || true)"

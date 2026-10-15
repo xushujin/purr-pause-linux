@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>激活 胖猫暂停一下（PurrPause）</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: system-ui, -apple-system, sans-serif;
+            background: linear-gradient(160deg, #f4a460, #ff8c42);
+            color: #3d2200;
+            padding: 24px;
+            user-select: none;
+            overflow-y: auto;
+        }
+        h1 {
+            font-size: 1.2rem;
+            margin-bottom: 16px;
+            color: #fff;
+            text-shadow: 0 1px 2px rgba(0,0,0,0.15);
+        }
+        .section {
+            background: rgba(255,255,255,0.92);
+            border-radius: 12px;
+            padding: 16px 20px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+        .field {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 10px 0;
+        }
+        .field + .field { border-top: 1px solid rgba(244,164,96,0.2); }
+        .field label {
+            font-size: 0.9rem;
+            color: #3d2200;
+            font-weight: 500;
+        }
+        .field .hint {
+            font-size: 0.75rem;
+            color: #8b5e34;
+            margin-top: 2px;
+        }
+        .field code {
+            font-family: monospace;
+            font-size: 0.85rem;
+            background: #f9f0e6;
+            padding: 3px 8px;
+            border-radius: 4px;
+            letter-spacing: 0.5px;
+            user-select: all;
+        }
+        .btn-copy {
+            padding: 4px 12px;
+            border: 1px solid #f4a460;
+            border-radius: 6px;
+            font-size: 0.8rem;
+            background: #fff;
+            color: #8b5e34;
+            cursor: pointer;
+            margin-left: 6px;
+        }
+        .serial-field {
+            padding: 10px 0;
+            border-top: 1px solid rgba(244,164,96,0.2);
+        }
+        .serial-field label {
+            font-size: 0.9rem;
+            color: #3d2200;
+            font-weight: 500;
+            display: block;
+            margin-bottom: 8px;
+        }
+        .serial-field textarea {
+            width: 100%;
+            height: 80px;
+            padding: 8px 12px;
+            border: 1px solid #f4a460;
+            border-radius: 8px;
+            font-size: 0.8rem;
+            font-family: monospace;
+            resize: none;
+            outline: none;
+            word-break: break-all;
+            transition: border-color 0.2s, box-shadow 0.2s;
+        }
+        .serial-field textarea:focus {
+            border-color: #e07b20;
+            box-shadow: 0 0 0 3px rgba(244,164,96,0.3);
+        }
+        .serial-field textarea::placeholder {
+            color: #cba070;
+        }
+        .actions {
+            display: flex;
+            justify-content: flex-end;
+            gap: 10px;
+            margin-top: 16px;
+        }
+        button {
+            padding: 8px 24px;
+            border: none;
+            border-radius: 8px;
+            font-size: 0.9rem;
+            cursor: pointer;
+            transition: transform 0.15s;
+        }
+        button:active { transform: scale(0.97); }
+        .btn-activate {
+            background: #fff;
+            color: #e07b20;
+            font-weight: 700;
+            box-shadow: 0 2px 6px rgba(0,0,0,0.1);
+        }
+        .btn-activate:disabled {
+            background: #f0f0f0;
+            color: #bbb;
+            cursor: not-allowed;
+        }
+        .btn-later {
+            background: rgba(255,255,255,0.5);
+            color: #6b3a00;
+        }
+        .status-msg {
+            position: fixed;
+            bottom: 16px;
+            left: 50%;
+            transform: translateX(-50%) translateY(10px);
+            font-size: 0.85rem;
+            text-align: center;
+            padding: 8px 24px;
+            border-radius: 8px;
+            opacity: 0;
+            transition: opacity 0.3s, transform 0.3s;
+            z-index: 100;
+            pointer-events: none;
+        }
+        .status-msg.show {
+            opacity: 1;
+            transform: translateX(-50%) translateY(0);
+        }
+        .status-msg.success {
+            background: rgba(34, 197, 94, 0.15);
+            color: #16a34a;
+        }
+        .status-msg.error {
+            background: rgba(239, 68, 68, 0.15);
+            color: #dc2626;
+        }
+    </style>
+</head>
+<body>
+    <h1>激活 胖猫暂停一下（PurrPause）</h1>
+    <div class="section">
+        <div class="field">
+            <div>
+                <label>授权状态</label>
+                <div class="hint" id="statusText">检查中...</div>
+            </div>
+        </div>
+        <div class="field">
+            <div>
+                <label>机器码</label>
+                <div class="hint">将此机器码发送给开发者获取序列号</div>
+            </div>
+            <div style="display:flex;align-items:center;">
+                <code id="machineId">-</code>
+                <button class="btn-copy" id="copyMidBtn">复制</button>
+            </div>
+        </div>
+        <div class="serial-field">
+            <label>序列号</label>
+            <textarea id="serialInput" placeholder="粘贴序列号（PP-开头）"></textarea>
+        </div>
+    </div>
+    <div class="actions">
+        <button class="btn-later" id="laterBtn" style="display:none">稍后再说</button>
+        <button class="btn-activate" id="activateBtn" disabled>激活</button>
+    </div>
+    <p class="status-msg" id="statusMsg"></p>
+
+    <script>
+        const serialInput = document.getElementById('serialInput');
+        const activateBtn = document.getElementById('activateBtn');
+        const laterBtn = document.getElementById('laterBtn');
+        const statusMsg = document.getElementById('statusMsg');
+        const statusText = document.getElementById('statusText');
+        const machineIdEl = document.getElementById('machineId');
+
+        document.getElementById('copyMidBtn').addEventListener('click', () => {
+            navigator.clipboard.writeText(machineIdEl.textContent);
+            const btn = document.getElementById('copyMidBtn');
+            btn.textContent = '已复制';
+            setTimeout(() => { btn.textContent = '复制'; }, 1500);
+        });
+
+        serialInput.addEventListener('input', () => {
+            const val = serialInput.value.trim();
+            activateBtn.disabled = !val || val.length < 20;
+        });
+
+        activateBtn.addEventListener('click', () => {
+            showMsg('', '');
+            const serial = serialInput.value.trim();
+            window.electronAPI.activate(serial);
+        });
+
+        laterBtn.addEventListener('click', () => {
+            window.electronAPI.skipActivation();
+        });
+
+        function showMsg(msg, type) {
+            statusMsg.textContent = msg;
+            statusMsg.className = 'status-msg' + (type ? ' ' + type + ' show' : '');
+        }
+
+        window.electronAPI.onActivationResult((result) => {
+            if (result.success) {
+                const info = result.type === 'permanent' ? '永久授权' : `有效期至 ${result.expiresAt.split('T')[0]}`;
+                showMsg('激活成功！（' + info + '）', 'success');
+                setTimeout(() => {
+                    window.electronAPI.skipActivation();
+                }, 2000);
+            } else {
+                showMsg(result.error, 'error');
+            }
+        });
+
+        window.electronAPI.onLicenseStatus((status) => {
+            if (status.machineId) {
+                machineIdEl.textContent = status.machineId;
+            }
+            if (status.status === 'trial') {
+                statusText.textContent = '试用中（剩余 ' + status.daysLeft + ' 天）';
+                laterBtn.style.display = 'block';
+            } else if (status.status === 'expired') {
+                statusText.textContent = status.type === 'trial' ? '试用已到期' : '授权已到期';
+                statusText.style.color = '#e74c3c';
+                laterBtn.style.display = 'none';
+            } else if (status.status === 'active') {
+                statusText.textContent = status.type === 'permanent' ? '已激活（永久）' : '已激活（剩余 ' + status.daysLeft + ' 天）';
+                laterBtn.style.display = 'block';
+            }
+        });
+    </script>
+</body>
+</html>

@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>胖猫暂停一下（PurrPause） 打包指南</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            line-height: 1.7;
+            color: #2d2d2d;
+            background: #faf8f5;
+            padding: 40px 20px;
+        }
+        .container { max-width: 800px; margin: 0 auto; }
+        h1 {
+            font-size: 2rem;
+            color: #e07b20;
+            margin-bottom: 8px;
+        }
+        h1 span { font-size: 1.2rem; color: #999; font-weight: 400; }
+        h2 {
+            font-size: 1.4rem;
+            color: #3d2200;
+            margin-top: 40px;
+            margin-bottom: 16px;
+            padding-bottom: 8px;
+            border-bottom: 2px solid #f4a460;
+        }
+        h3 {
+            font-size: 1.1rem;
+            color: #5a3e1b;
+            margin-top: 24px;
+            margin-bottom: 8px;
+        }
+        p { margin-bottom: 12px; }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 16px 0;
+            font-size: 0.9rem;
+        }
+        th, td {
+            padding: 10px 14px;
+            text-align: left;
+            border: 1px solid #e8e0d8;
+        }
+        th { background: #f4a460; color: #fff; font-weight: 600; }
+        tr:nth-child(even) { background: #fdf6ef; }
+        code {
+            background: #fff3e6;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 0.88em;
+            color: #c05000;
+        }
+        pre {
+            background: #1e1e1e;
+            color: #d4d4d4;
+            padding: 16px 20px;
+            border-radius: 8px;
+            overflow-x: auto;
+            margin: 12px 0;
+            font-size: 0.88rem;
+            line-height: 1.5;
+        }
+        pre code { background: none; color: inherit; padding: 0; }
+        .note {
+            background: #fff8f0;
+            border-left: 4px solid #f4a460;
+            padding: 12px 16px;
+            margin: 16px 0;
+            border-radius: 0 8px 8px 0;
+            font-size: 0.9rem;
+        }
+        .warn {
+            background: #fff3f3;
+            border-left: 4px solid #e74c3c;
+            padding: 12px 16px;
+            margin: 16px 0;
+            border-radius: 0 8px 8px 0;
+            font-size: 0.9rem;
+        }
+        .structure {
+            background: #f9f9f9;
+            border: 1px solid #e8e0d8;
+            border-radius: 8px;
+            padding: 16px 20px;
+            font-family: monospace;
+            font-size: 0.85rem;
+            line-height: 1.6;
+        }
+        hr { border: none; border-top: 1px solid #e8e0d8; margin: 32px 0; }
+    </style>
+</head>
+<body>
+<div class="container">
+
+<h1>胖猫暂停一下（PurrPause） 打包指南 <span>Build Guide</span></h1>
+
+<h2>环境要求</h2>
+<table>
+    <tr><th>平台</th><th>系统要求</th><th>工具要求</th></tr>
+    <tr><td>Linux (.deb / AppImage)</td><td>Ubuntu 18.04+ 或任意 Linux（x64 / arm64）</td><td>Node.js 18+, npm, xz-utils, binutils</td></tr>
+    <tr><td>macOS (.dmg)</td><td>macOS 11+</td><td>Node.js 18+, npm, Xcode Command Line Tools</td></tr>
+    <tr><td>Windows (.exe)</td><td>Windows 10+（x64 / arm64）</td><td>Node.js 18+, npm</td></tr>
+</table>
+
+<h2>通用步骤</h2>
+
+<h3>1. 克隆项目并安装依赖</h3>
+<pre><code>git clone &lt;your-repo-url&gt;
+cd purr-pause
+npm install</code></pre>
+
+<div class="note">如果 Electron 下载慢，可使用镜像：<br>
+<code>ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/ npm install</code></div>
+
+<h3>2. 验证开发环境</h3>
+<pre><code>npm start</code></pre>
+<p>确认应用正常启动，托盘图标出现后再进行打包。</p>
+
+<hr>
+
+<h2>Linux 打包 (.deb / AppImage)</h2>
+
+<h3>额外依赖</h3>
+<pre><code>sudo apt-get install -y xz-utils binutils</code></pre>
+
+<h3>打包命令</h3>
+<pre><code># 当前主机架构的 deb（默认）
+npm run build:linux
+
+# arm64 的 deb（x64 主机可交叉打包，无需 ARM 机器）
+npm run build:linux:arm64
+
+# AppImage（x64 / arm64，免安装、双击即用）
+npm run build:appimage
+npm run build:appimage:arm64
+
+# 一次性产出全部 4 个 Linux 产物（deb + AppImage，x64 + arm64）
+npm run build:linux:all</code></pre>
+
+<div class="note">本项目无原生依赖，可在 x64 主机上交叉打包 arm64：electron-builder 会自动下载对应架构的 Electron 与 appimagetool，无需额外 apt 包。</div>
+
+<h3>产物位置</h3>
+<pre><code>dist/purr-pause_1.4.0_amd64.deb           # x64 deb
+dist/purr-pause_1.4.0_arm64.deb           # arm64 deb
+dist/purr-pause-1.4.0.AppImage            # x64 AppImage
+dist/purr-pause-1.4.0-arm64.AppImage      # arm64 AppImage</code></pre>
+
+<h3>安装 / 卸载</h3>
+<pre><code># 安装
+sudo dpkg -i dist/purr-pause_1.4.0_amd64.deb
+
+# 卸载
+sudo dpkg -r purr-pause</code></pre>
+<p>通过 <code>sudo dpkg -i</code> 安装时，deb 的 <code>afterInstall</code> 脚本会先把 <code>/opt/purr-pause/chrome-sandbox</code> 设置为 <code>root:root</code> 和 <code>4755</code>，避免 Electron 启动时报 SUID sandbox 权限错误；随后为执行 sudo 的桌面用户写入 <code>~/.config/autostart/purr-pause.desktop</code>，用于 Ubuntu 登录后自启动。应用内设置页的“开机自动启动”开关读写同一个文件。</p>
+
+<hr>
+
+<h2>macOS 打包 (.dmg)</h2>
+
+<h3>前置条件</h3>
+<pre><code>xcode-select --install</code></pre>
+
+<p>（可选）配置代码签名：</p>
+<pre><code>export CSC_NAME="Developer ID Application: Your Name (TEAM_ID)"</code></pre>
+
+<div class="note">不签名也能打包，但用户首次打开需要：右键 → 打开 → 确认。</div>
+
+<h3>打包命令</h3>
+<pre><code>npm run build:mac</code></pre>
+
+<h3>产物位置</h3>
+<pre><code>dist/purr-pause-1.4.0.dmg</code></pre>
+
+<h3>同时打包 Intel + Apple Silicon 版本</h3>
+<pre><code>npm run build:mac -- --arm64 --x64</code></pre>
+
+<div class="warn">未签名的应用首次运行需要：系统偏好设置 → 安全性与隐私 → 仍要打开</div>
+
+<hr>
+
+<h2>Windows 打包 (.exe)</h2>
+
+<h3>打包命令</h3>
+<pre><code># 当前主机架构（默认）
+npm run build:win
+
+# arm64（x64 主机可交叉打包，无需 ARM 机器）
+npm run build:win:arm64
+
+# x64 + arm64（一次产出两个安装包）
+npm run build:win:all</code></pre>
+
+<h3>产物位置</h3>
+<pre><code>dist/purr-pause-Setup-1.4.0-x64.exe      # x64
+dist/purr-pause-Setup-1.4.0-arm64.exe    # arm64</code></pre>
+
+<div class="warn">未签名的安装包会触发 Windows SmartScreen 警告，用户需要点击"更多信息" → "仍要运行"。</div>
+
+<h3>（可选）代码签名</h3>
+<pre><code>set CSC_LINK=path/to/certificate.pfx
+set CSC_KEY_PASSWORD=your-password
+npm run build:win</code></pre>
+
+<hr>
+
+<h2>GitHub Actions 自动构建（推荐）</h2>
+
+<p>推送 tag 后自动在三个平台上构建，无需本地配置多平台环境。Linux 侧产出 deb + AppImage（x64 + arm64）共 4 个产物，macOS 产出 Intel + Apple Silicon 双架构 dmg，Windows 产出 x64 + arm64 两个安装包。</p>
+
+<h3>触发方式</h3>
+<pre><code>git tag v1.4.0
+git push origin v1.4.0</code></pre>
+
+<p>构建完成后在 GitHub Actions 页面下载产物。</p>
+
+<div class="note">配置文件位于 <code>.github/workflows/build.yml</code>，详见项目仓库。</div>
+
+<hr>
+
+<h2>常见问题</h2>
+
+<h3>Q: Linux 打包报错 "Need executable 'ar'"</h3>
+<pre><code>sudo apt-get install -y binutils</code></pre>
+
+<h3>Q: Linux 打包报错 "tar failed (exit code 2)"</h3>
+<pre><code>sudo apt-get install -y xz-utils</code></pre>
+
+<h3>Q: Electron 下载超时</h3>
+<pre><code>ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/ npm install</code></pre>
+
+<h3>Q: macOS 打包报错 "No identity found for signing"</h3>
+<pre><code>CSC_IDENTITY_AUTO_DISCOVERY=false npm run build:mac</code></pre>
+
+<h3>Q: Windows 打包在 Linux 上失败</h3>
+<p>Windows 打包需要 wine 或在 Windows 系统上执行。推荐使用 GitHub Actions。</p>
+
+<hr>
+
+<h2>项目结构</h2>
+<div class="structure">
+purr-pause/<br>
+├── main.js &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;# Electron 主进程<br>
+├── preload.js &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;# IPC 桥接<br>
+├── config.json &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;# 默认配置<br>
+├── package.json &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;# 项目配置 &amp; 打包配置<br>
+├── lib/<br>
+│&nbsp;&nbsp; ├── license.js&nbsp;# 激活/授权逻辑<br>
+│&nbsp;&nbsp; ├── message-notify.js&nbsp;# 消息提醒<br>
+│&nbsp;&nbsp; └── logger.js&nbsp;# 日志<br>
+├── renderer/<br>
+│&nbsp;&nbsp; ├── index.html &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;# 猫咪动画覆盖层<br>
+│&nbsp;&nbsp; ├── settings.html &nbsp;&nbsp;&nbsp;# 设置窗口<br>
+│&nbsp;&nbsp; ├── activation.html&nbsp;# 激活窗口<br>
+│&nbsp;&nbsp; ├── message-list.html&nbsp;# 消息列表<br>
+│&nbsp;&nbsp; ├── message-settings.html&nbsp;# 消息提醒设置<br>
+│&nbsp;&nbsp; ├── rocket-demo.html&nbsp;# 小火箭演示<br>
+│&nbsp;&nbsp; └── rules.html&nbsp;# 规则说明<br>
+├── assets/<br>
+│&nbsp;&nbsp; ├── images/<br>
+│&nbsp;&nbsp; │&nbsp;&nbsp; ├── logo.png<br>
+│&nbsp;&nbsp; │&nbsp;&nbsp; └── tray-icon.png<br>
+│&nbsp;&nbsp; └── webm/<br>
+│&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; ├── cat-walk.webm &nbsp;# 走路动画<br>
+│&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; └── cat-rest.webm &nbsp;# 躺下动画<br>
+└── build/<br>
+&nbsp;&nbsp;&nbsp; └── icons/ &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;# 各平台图标<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; ├── icon.ico &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;# Windows<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; ├── icon.icns &nbsp;&nbsp;&nbsp;&nbsp;# macOS<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; └── *.png &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;# Linux (多尺寸)
+</div>
+
+</div>
+</body>
+</html>

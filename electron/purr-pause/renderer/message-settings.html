@@ -1,0 +1,946 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>消息提醒设置</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: system-ui, -apple-system, sans-serif;
+            background: linear-gradient(160deg, #f4a460, #ff8c42);
+            color: #3d2200;
+            padding: 22px 22px 28px;
+            user-select: none;
+            overflow-y: auto;
+        }
+        h1 {
+            font-size: 1.2rem;
+            margin-bottom: 6px;
+            color: #fff;
+            text-shadow: 0 1px 2px rgba(0,0,0,0.15);
+        }
+        .subtitle {
+            font-size: 0.78rem;
+            color: rgba(255,255,255,0.88);
+            margin-bottom: 16px;
+        }
+        /* ---------- 通用卡片 ---------- */
+        .section {
+            background: rgba(255,255,255,0.92);
+            border-radius: 12px;
+            padding: 14px 18px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+        .section + .section,
+        .section + .add-row,
+        .add-row + .section,
+        .sources-wrap + .add-row { margin-top: 14px; }
+
+        /* ---------- 顶部总开关 ---------- */
+        .master {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 14px;
+        }
+        .master label.title { font-size: 1rem; font-weight: 700; color: #3d2200; }
+        .master .hint { font-size: 0.75rem; color: #8b5e34; margin-top: 2px; }
+
+        /* ---------- 分区标题 ---------- */
+        .area-title {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin: 18px 2px 10px;
+            color: #fff;
+            font-size: 0.9rem;
+            font-weight: 600;
+            text-shadow: 0 1px 2px rgba(0,0,0,0.12);
+        }
+        .area-title .btn-spec {
+            margin-left: auto;
+            padding: 3px 12px;
+            border: 1px solid rgba(255,255,255,0.55);
+            border-radius: 999px;
+            background: rgba(61,34,0,0.55);
+            color: #fff;
+            font-size: 0.76rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: background 0.15s, transform 0.15s;
+        }
+        .area-title .btn-spec:hover { background: rgba(61,34,0,0.72); }
+        .area-title .btn-spec:active { transform: scale(0.97); }
+        .area-title .count {
+            font-size: 0.72rem;
+            font-weight: 500;
+            background: rgba(255,255,255,0.28);
+            color: #fff;
+            border-radius: 999px;
+            padding: 1px 9px;
+        }
+
+        /* ---------- 源卡片 ---------- */
+        .sources-wrap { display: flex; flex-direction: column; gap: 12px; }
+        .source-card {
+            background: rgba(255,255,255,0.92);
+            border: 1px solid rgba(224,123,32,0.28);
+            border-radius: 12px;
+            padding: 13px 16px 14px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+        }
+        .source-card.disabled { opacity: 0.62; }
+        .source-head {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .source-head .name-input {
+            flex: 1;
+            min-width: 0;
+            padding: 7px 11px;
+            border: 1px solid #f4a460;
+            border-radius: 8px;
+            font-size: 0.95rem;
+            font-weight: 600;
+            color: #3d2200;
+            outline: none;
+            background: #fff;
+            transition: border-color 0.2s, box-shadow 0.2s;
+        }
+        /* iOS 风格开关 */
+        .switch { position: relative; display: inline-block; width: 40px; height: 22px; flex-shrink: 0; cursor: pointer; }
+        .switch input { opacity: 0; width: 0; height: 0; }
+        .switch .slider {
+            position: absolute; inset: 0;
+            background: #d9c3ab;
+            border-radius: 999px;
+            transition: background 0.2s;
+        }
+        .switch .slider::before {
+            content: ""; position: absolute;
+            height: 16px; width: 16px; left: 3px; top: 3px;
+            background: #fff; border-radius: 50%;
+            transition: transform 0.2s;
+            box-shadow: 0 1px 2px rgba(0,0,0,0.2);
+        }
+        .switch input:checked + .slider { background: #e07b20; }
+        .switch input:checked + .slider::before { transform: translateX(18px); }
+        .btn-del {
+            flex-shrink: 0;
+            width: 28px; height: 28px;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            background: #fff;
+            color: #c0392b;
+            font-size: 1rem;
+            line-height: 1;
+            cursor: pointer;
+            transition: background 0.15s, border-color 0.15s;
+        }
+        .btn-del:hover { background: #fdecea; border-color: #e6b0aa; }
+
+        .source-row { margin-top: 11px; }
+        .source-row > label {
+            display: block;
+            font-size: 0.8rem;
+            font-weight: 500;
+            color: #8b5e34;
+            margin-bottom: 5px;
+        }
+        .source-row input.url-input {
+            width: 100%;
+            padding: 7px 11px;
+            border: 1px solid #f4a460;
+            border-radius: 8px;
+            font-size: 0.9rem;
+            color: #3d2200;
+            outline: none;
+            background: #fff;
+            transition: border-color 0.2s, box-shadow 0.2s;
+        }
+        .source-row .url-hint {
+            font-size: 0.7rem;
+            line-height: 1.55;
+            color: #a8865c;
+            margin-top: 6px;
+        }
+        .source-row .url-hint-eg {
+            font-size: 0.7rem;
+            color: #a8865c;
+            margin-top: 3px;
+        }
+        .source-row .url-hint-eg code {
+            font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+            font-size: 0.68rem;
+            color: #c47f33;
+            background: rgba(224,123,32,0.10);
+            padding: 1px 6px;
+            border-radius: 5px;
+            word-break: break-all;
+        }
+
+        /* 请求头折叠 */
+        .headers-toggle {
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            margin-top: 12px;
+            font-size: 0.8rem;
+            color: #8b5e34;
+            cursor: pointer;
+            user-select: none;
+        }
+        .headers-toggle .arrow { transition: transform 0.2s; display: inline-block; }
+        .headers-toggle.open .arrow { transform: rotate(90deg); }
+        .headers-body { display: none; margin-top: 8px; }
+        .headers-body.open { display: block; }
+        .headers-body .hint { font-size: 0.72rem; color: #8b5e34; margin-bottom: 5px; }
+        textarea.headers-input {
+            width: 100%;
+            min-height: 64px;
+            padding: 8px 10px;
+            border: 1px solid #f4a460;
+            border-radius: 8px;
+            resize: vertical;
+            font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", Menlo, monospace;
+            font-size: 0.8rem;
+            line-height: 1.35;
+            outline: none;
+            background: #fff;
+            user-select: text;
+            transition: border-color 0.2s, box-shadow 0.2s;
+        }
+
+        /* 测试连接 */
+        .source-test {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            flex-wrap: wrap;
+            margin-top: 12px;
+            padding-top: 11px;
+            border-top: 1px solid rgba(244,164,96,0.25);
+        }
+        .test-result {
+            flex: 1;
+            min-width: 0;
+            font-size: 0.8rem;
+            color: #8b5e34;
+            overflow-wrap: anywhere;
+        }
+
+        .empty-tip {
+            text-align: center;
+            color: rgba(255,255,255,0.92);
+            font-size: 0.82rem;
+            padding: 14px 0 4px;
+        }
+
+        .add-row { display: flex; }
+        .btn-add {
+            width: 100%;
+            padding: 11px;
+            border: 1.5px dashed rgba(255,255,255,0.7);
+            border-radius: 12px;
+            background: rgba(255,255,255,0.18);
+            color: #fff;
+            font-size: 0.9rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background 0.15s;
+        }
+        .btn-add:hover { background: rgba(255,255,255,0.3); }
+
+        /* ---------- 全局设置（折叠区） ---------- */
+        .global-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            cursor: pointer;
+            user-select: none;
+        }
+        .global-header .gh-title {
+            display: flex; align-items: center; gap: 8px;
+            font-size: 0.95rem; font-weight: 700; color: #3d2200;
+        }
+        .global-header .arrow { transition: transform 0.2s; color: #e07b20; }
+        .global-header.open .arrow { transform: rotate(90deg); }
+        .global-body { display: none; margin-top: 6px; }
+        .global-body.open { display: block; }
+
+        .field {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 11px 0;
+            gap: 14px;
+        }
+        .field.column { display: block; }
+        .field + .field { border-top: 1px solid rgba(244,164,96,0.2); }
+        .field label { font-size: 0.9rem; color: #3d2200; font-weight: 500; }
+        .field .hint { font-size: 0.75rem; color: #8b5e34; margin-top: 2px; }
+        /* 左侧文字块可伸缩换行，右侧输入+单位整体不收缩、不折行 */
+        .field:not(.column) > :first-child { flex: 1; min-width: 0; }
+        .field:not(.column) > :last-child { flex-shrink: 0; white-space: nowrap; }
+        .field input[type="number"] {
+            width: 70px;
+            padding: 6px 10px;
+            border: 1px solid #f4a460;
+            border-radius: 8px;
+            font-size: 0.95rem;
+            text-align: center;
+            outline: none;
+            background: #fff;
+            transition: border-color 0.2s, box-shadow 0.2s;
+        }
+        .field input[type="text"] {
+            width: 160px;
+            padding: 6px 10px;
+            border: 1px solid #f4a460;
+            border-radius: 8px;
+            font-size: 0.9rem;
+            text-align: left;
+            outline: none;
+            background: #fff;
+            transition: border-color 0.2s, box-shadow 0.2s;
+        }
+
+        input:focus, textarea:focus {
+            border-color: #e07b20 !important;
+            box-shadow: 0 0 0 3px rgba(244,164,96,0.3);
+        }
+        input.invalid, textarea.invalid {
+            border-color: #ef4444 !important;
+            box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.2);
+        }
+
+        .btn-pick, .btn-clear, .btn-test {
+            padding: 5px 14px;
+            border: 1px solid #f4a460;
+            border-radius: 8px;
+            font-size: 0.82rem;
+            background: #fff;
+            color: #8b5e34;
+            cursor: pointer;
+            transition: transform 0.15s, background 0.15s;
+        }
+        .btn-test { color: #e07b20; font-weight: 600; }
+        .btn-test:disabled { opacity: 0.6; cursor: default; }
+        .btn-pick:active, .btn-clear:active, .btn-test:active { transform: scale(0.97); }
+        .btn-clear { border-color: #ddd; color: #999; }
+
+        /* ---------- 底部操作 ---------- */
+        .actions {
+            display: flex;
+            justify-content: flex-end;
+            gap: 10px;
+            margin-top: 18px;
+        }
+        button.btn-save, button.btn-cancel {
+            padding: 9px 26px;
+            border: none;
+            border-radius: 8px;
+            font-size: 0.9rem;
+            cursor: pointer;
+            transition: transform 0.15s;
+        }
+        button.btn-save:active, button.btn-cancel:active { transform: scale(0.97); }
+        .btn-save {
+            background: #fff;
+            color: #e07b20;
+            font-weight: 700;
+            box-shadow: 0 2px 6px rgba(0,0,0,0.1);
+        }
+        .btn-cancel { background: rgba(255,255,255,0.5); color: #6b3a00; }
+
+        /* ---------- 顶部/底部浮层状态 ---------- */
+        .status {
+            position: fixed;
+            bottom: 16px;
+            left: 50%;
+            transform: translateX(-50%) translateY(10px);
+            font-size: 0.85rem;
+            text-align: center;
+            padding: 8px 22px;
+            border-radius: 8px;
+            opacity: 0;
+            transition: opacity 0.3s, transform 0.3s;
+            z-index: 100;
+            pointer-events: none;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+        }
+        .status.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+        .status.success { background: #ecfdf3; color: #16a34a; }
+        .status.error { background: #fef2f2; color: #dc2626; }
+    </style>
+</head>
+<body>
+    <h1>消息提醒设置</h1>
+    <div class="subtitle">配置一个或多个第三方接口源，胖猫会轮询待办并用小火箭提醒你。</div>
+
+    <!-- ① 顶部总开关 -->
+    <div class="section">
+        <div class="master">
+            <div>
+                <label class="title">启用消息提醒</label>
+                <div class="hint">关闭后停止所有接口源的轮询并隐藏待办角标</div>
+            </div>
+            <label class="switch">
+                <input type="checkbox" id="messageNotifyEnabled">
+                <span class="slider"></span>
+            </label>
+        </div>
+    </div>
+
+    <!-- ② 接口源卡片列表 -->
+    <div class="area-title">
+        <span>接口源</span>
+        <span class="count" id="sourceCount">0</span>
+        <button type="button" class="btn-spec" id="downloadApiSpecBtn" title="下载第三方系统对接用的 Markdown 接口文档，发给第三方按此规范开发对接接口">📄 下载接口规范</button>
+    </div>
+    <div class="sources-wrap" id="sourcesWrap"></div>
+    <div class="empty-tip" id="emptyTip" style="display:none;">暂无接口源，点击下方按钮添加一个。</div>
+    <div class="add-row">
+        <button class="btn-add" id="addSourceBtn">＋ 添加接口源</button>
+    </div>
+
+    <!-- ③ 折叠的全局设置 -->
+    <div class="area-title"><span>更多</span></div>
+    <div class="section">
+        <div class="global-header" id="globalHeader">
+            <div class="gh-title"><span class="arrow">▸</span><span>全局设置</span></div>
+            <div class="hint" style="font-size:0.75rem;color:#8b5e34;">轮询间隔 / 每源条数 / 小火箭素材</div>
+        </div>
+        <div class="global-body" id="globalBody">
+            <div class="field">
+                <div>
+                    <label>轮询间隔</label>
+                    <div class="hint">拉取待办列表的间隔（所有源共用），10-3600 秒</div>
+                </div>
+                <div><input type="number" id="messagePollInterval" min="10" max="3600"> 秒</div>
+            </div>
+            <div class="field">
+                <div>
+                    <label>每源待办条数</label>
+                    <div class="hint">每个源查询并保留的最近待办条数，1-30</div>
+                </div>
+                <div><input type="number" id="messageMaxCacheItems" min="1" max="30"> 条</div>
+            </div>
+            <div class="field">
+                <div style="flex:1;min-width:0;">
+                    <label>小火箭素材目录</label>
+                    <div class="hint" id="messageNotifyDirHint" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">使用默认目录</div>
+                </div>
+                <div style="display:flex;gap:6px;align-items:center;flex-shrink:0;">
+                    <button class="btn-pick" id="pickNotifyDirBtn">选择</button>
+                    <button class="btn-clear" id="clearNotifyDirBtn">重置</button>
+                </div>
+            </div>
+            <div class="field">
+                <div>
+                    <label>小火箭素材</label>
+                    <div class="hint">WebM 文件名，找不到时使用内置火箭</div>
+                </div>
+                <input type="text" id="messageNotifyVideo" placeholder="notify-rocket.webm">
+            </div>
+        </div>
+    </div>
+
+    <!-- ④ 底部操作 -->
+    <div class="actions">
+        <button class="btn-cancel" id="cancelBtn">取消</button>
+        <button class="btn-save" id="saveBtn">保存</button>
+    </div>
+    <p class="status" id="status"></p>
+
+    <script>
+        'use strict';
+
+        // ---------- 全局元素 ----------
+        const enabledInput = document.getElementById('messageNotifyEnabled');
+        const sourcesWrap = document.getElementById('sourcesWrap');
+        const emptyTip = document.getElementById('emptyTip');
+        const sourceCountEl = document.getElementById('sourceCount');
+        const pollIntervalInput = document.getElementById('messagePollInterval');
+        const maxCacheItemsInput = document.getElementById('messageMaxCacheItems');
+        const notifyVideoInput = document.getElementById('messageNotifyVideo');
+        const notifyDirHint = document.getElementById('messageNotifyDirHint');
+        const statusEl = document.getElementById('status');
+        let messageNotifyDir = '';
+
+        // ---------- 源临时 id（后端会去重/补全，前端只需给个值） ----------
+        function genSourceId() {
+            return 'src-' + Math.random().toString(36).slice(2, 8).padEnd(6, '0');
+        }
+
+        // ---------- 状态浮层 ----------
+        function showStatus(msg, type) {
+            statusEl.textContent = msg;
+            statusEl.className = 'status ' + type + ' show';
+            setTimeout(() => statusEl.classList.remove('show'), 2500);
+        }
+
+        // ---------- URL / headers 校验工具 ----------
+        function isHttpUrl(value) {
+            try {
+                const u = new URL(value);
+                return u.protocol === 'http:' || u.protocol === 'https:';
+            } catch (e) {
+                return false;
+            }
+        }
+        function isJsonObject(value) {
+            try {
+                const parsed = JSON.parse((value || '').trim() || '{}');
+                return parsed && typeof parsed === 'object' && !Array.isArray(parsed);
+            } catch (e) {
+                return false;
+            }
+        }
+
+        // 小工具：构造一个带文本的 span
+        function makeSpan(className, text) {
+            const span = document.createElement('span');
+            if (className) span.className = className;
+            if (text !== undefined) span.textContent = text;
+            return span;
+        }
+
+        // ---------- 当前正在测试的卡片（同一时刻仅一个） ----------
+        let activeTestCard = null;     // 指向发起测试的源卡片对象
+        let testTimeoutTimer = null;
+
+        // ---------- 源卡片工厂 ----------
+        // 返回一个 cardObj，含 el 与校验/收集所需的输入引用
+        function createSourceCard(source) {
+            const data = source || {};
+            const card = document.createElement('div');
+            card.className = 'source-card';
+
+            // 标题行：名称 + 启用开关 + 删除
+            const head = document.createElement('div');
+            head.className = 'source-head';
+
+            const nameInput = document.createElement('input');
+            nameInput.type = 'text';
+            nameInput.className = 'name-input';
+            nameInput.placeholder = '接口源名称，例如 OA系统';
+            nameInput.value = data.name || '';
+
+            const switchLabel = document.createElement('label');
+            switchLabel.className = 'switch';
+            const enabledBox = document.createElement('input');
+            enabledBox.type = 'checkbox';
+            enabledBox.checked = data.enabled === undefined ? true : !!data.enabled;
+            const slider = document.createElement('span');
+            slider.className = 'slider';
+            switchLabel.appendChild(enabledBox);
+            switchLabel.appendChild(slider);
+
+            const delBtn = document.createElement('button');
+            delBtn.className = 'btn-del';
+            delBtn.title = '删除该接口源';
+            delBtn.textContent = '×';
+
+            head.appendChild(nameInput);
+            head.appendChild(switchLabel);
+            head.appendChild(delBtn);
+
+            // 待办接口地址（完整 URL）
+            const urlRow = document.createElement('div');
+            urlRow.className = 'source-row';
+            const urlLabel = document.createElement('label');
+            urlLabel.textContent = '待办接口地址（完整 URL）';
+            const urlInput = document.createElement('input');
+            urlInput.type = 'text';
+            urlInput.className = 'url-input';
+            urlInput.placeholder = 'https://oa.example.com/purr-pause/v1/todos';
+            urlInput.value = data.listUrl || '';
+            const urlHint = document.createElement('div');
+            urlHint.className = 'url-hint';
+            urlHint.textContent = '完整的待办列表接口地址，PurrPause 只在其后追加 limit/offset';
+            const urlHintEg = document.createElement('div');
+            urlHintEg.className = 'url-hint-eg';
+            urlHintEg.textContent = '推荐 ';
+            const urlHintCode = document.createElement('code');
+            urlHintCode.textContent = 'https://你的域名/purr-pause/v1/todos';
+            urlHintEg.appendChild(urlHintCode);
+            urlRow.appendChild(urlLabel);
+            urlRow.appendChild(urlInput);
+            urlRow.appendChild(urlHint);
+            urlRow.appendChild(urlHintEg);
+
+            // 请求头折叠
+            const headersToggle = document.createElement('div');
+            headersToggle.className = 'headers-toggle';
+            headersToggle.appendChild(makeSpan('arrow', '▸'));
+            headersToggle.appendChild(makeSpan('', '请求头（可选）'));
+            const headersBody = document.createElement('div');
+            headersBody.className = 'headers-body';
+            const headersHint = document.createElement('div');
+            headersHint.className = 'hint';
+            headersHint.textContent = 'JSON 对象，例如 {"Authorization":"Bearer xxx"}';
+            const headersInput = document.createElement('textarea');
+            headersInput.className = 'headers-input';
+            headersInput.spellcheck = false;
+            headersInput.placeholder = '{"Authorization":"Bearer xxx"}';
+            headersInput.value = data.authHeaders || '{}';
+            headersBody.appendChild(headersHint);
+            headersBody.appendChild(headersInput);
+            headersToggle.addEventListener('click', () => {
+                const open = headersBody.classList.toggle('open');
+                headersToggle.classList.toggle('open', open);
+            });
+
+            // 测试连接
+            const testRow = document.createElement('div');
+            testRow.className = 'source-test';
+            const testBtn = document.createElement('button');
+            testBtn.className = 'btn-test';
+            testBtn.textContent = '测试连接';
+            const testResult = document.createElement('span');
+            testResult.className = 'test-result';
+            testRow.appendChild(testBtn);
+            testRow.appendChild(testResult);
+
+            card.appendChild(head);
+            card.appendChild(urlRow);
+            card.appendChild(headersToggle);
+            card.appendChild(headersBody);
+            card.appendChild(testRow);
+
+            const cardObj = {
+                id: (data.id && String(data.id).trim()) || genSourceId(),
+                el: card,
+                nameInput,
+                enabledBox,
+                urlInput,
+                headersInput,
+                headersBody,
+                headersToggle,
+                testBtn,
+                testResult
+            };
+
+            // 启用态视觉反馈
+            function syncDisabledLook() {
+                card.classList.toggle('disabled', !enabledBox.checked);
+            }
+            enabledBox.addEventListener('change', syncDisabledLook);
+            syncDisabledLook();
+
+            // 输入清除 invalid
+            nameInput.addEventListener('input', () => nameInput.classList.remove('invalid'));
+            urlInput.addEventListener('input', () => urlInput.classList.remove('invalid'));
+            headersInput.addEventListener('input', () => headersInput.classList.remove('invalid'));
+
+            // 删除
+            delBtn.addEventListener('click', () => {
+                if (activeTestCard === cardObj) cancelActiveTest();
+                const idx = sourceCards.indexOf(cardObj);
+                if (idx >= 0) sourceCards.splice(idx, 1);
+                card.remove();
+                refreshSourceMeta();
+            });
+
+            // 测试连接
+            testBtn.addEventListener('click', () => runCardTest(cardObj));
+
+            return cardObj;
+        }
+
+        // ---------- 源卡片集合管理 ----------
+        const sourceCards = [];
+
+        function addSourceCard(source, fromUser) {
+            const cardObj = createSourceCard(source);
+            sourceCards.push(cardObj);
+            sourcesWrap.appendChild(cardObj.el);
+            refreshSourceMeta();
+            if (fromUser) {
+                cardObj.nameInput.focus();
+                cardObj.el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+            }
+            return cardObj;
+        }
+
+        function refreshSourceMeta() {
+            sourceCountEl.textContent = String(sourceCards.length);
+            emptyTip.style.display = sourceCards.length === 0 ? 'block' : 'none';
+        }
+
+        function clearAllCards() {
+            cancelActiveTest();
+            sourceCards.length = 0;
+            sourcesWrap.replaceChildren();
+            refreshSourceMeta();
+        }
+
+        // ---------- 每源测试连接 ----------
+        function setCardTestResult(cardObj, text, color) {
+            cardObj.testResult.textContent = text;
+            cardObj.testResult.style.color = color;
+        }
+
+        function finishActiveTest() {
+            if (testTimeoutTimer) { clearTimeout(testTimeoutTimer); testTimeoutTimer = null; }
+            if (activeTestCard) {
+                activeTestCard.testBtn.disabled = false;
+                activeTestCard.testBtn.textContent = '测试连接';
+            }
+            activeTestCard = null;
+        }
+
+        function cancelActiveTest() {
+            finishActiveTest();
+        }
+
+        function runCardTest(cardObj) {
+            if (activeTestCard) {
+                // 同一时刻只允许一个测试在跑
+                if (activeTestCard === cardObj) return;
+                setCardTestResult(cardObj, '请等待当前测试完成', '#dc2626');
+                return;
+            }
+            cardObj.urlInput.classList.remove('invalid');
+            cardObj.headersInput.classList.remove('invalid');
+
+            const listUrl = cardObj.urlInput.value.trim();
+            if (!listUrl) {
+                cardObj.urlInput.classList.add('invalid');
+                setCardTestResult(cardObj, '请先填写接口地址', '#dc2626');
+                return;
+            }
+            if (!isHttpUrl(listUrl)) {
+                cardObj.urlInput.classList.add('invalid');
+                setCardTestResult(cardObj, '接口地址不是合法 http/https URL', '#dc2626');
+                return;
+            }
+            const headers = cardObj.headersInput.value.trim() || '{}';
+            if (!isJsonObject(headers)) {
+                cardObj.headersInput.classList.add('invalid');
+                // 展开请求头方便修改
+                expandHeaders(cardObj);
+                setCardTestResult(cardObj, '请求头必须是 JSON 对象', '#dc2626');
+                return;
+            }
+
+            activeTestCard = cardObj;
+            cardObj.testBtn.disabled = true;
+            cardObj.testBtn.textContent = '测试中...';
+            setCardTestResult(cardObj, '正在请求待办列表接口...', '#8b5e34');
+
+            window.electronAPI.testMessageConnection({
+                listUrl: listUrl,
+                authHeaders: headers,
+                maxCacheItems: parseInt(maxCacheItemsInput.value, 10) || 30
+            });
+
+            testTimeoutTimer = setTimeout(() => {
+                if (!activeTestCard) return;
+                const c = activeTestCard;
+                finishActiveTest();
+                setCardTestResult(c, '✗ 测试超时（主进程无响应）', '#dc2626');
+            }, 15000);
+        }
+
+        window.electronAPI.onTestMessageConnectionResult((result) => {
+            if (!activeTestCard) return;
+            const cardObj = activeTestCard;
+            finishActiveTest();
+            if (!result) {
+                setCardTestResult(cardObj, '✗ 测试失败：未收到结果', '#dc2626');
+                return;
+            }
+            if (result.ok) {
+                const items = Number.isFinite(result.itemCount) ? result.itemCount : 0;
+                setCardTestResult(cardObj, '✓ 接通：列表返回 ' + items + ' 条', '#16a34a');
+                return;
+            }
+            const reason = result.error || '未知错误';
+            setCardTestResult(cardObj, '✗ 测试失败：' + reason, '#dc2626');
+        });
+
+        function expandHeaders(cardObj) {
+            cardObj.headersBody.classList.add('open');
+            cardObj.headersToggle.classList.add('open');
+        }
+
+        // ---------- 加载配置 ----------
+        window.electronAPI.onLoadConfig((config) => {
+            config = config || {};
+            enabledInput.checked = !!config.messageNotifyEnabled;
+
+            clearAllCards();
+            const sources = Array.isArray(config.messageSources) ? config.messageSources : [];
+            sources.forEach((s) => addSourceCard(s, false));
+            refreshSourceMeta();
+
+            pollIntervalInput.value = config.messagePollInterval || 60;
+            maxCacheItemsInput.value = config.messageMaxCacheItems || 30;
+            messageNotifyDir = config.messageNotifyDir || '';
+            notifyDirHint.textContent = messageNotifyDir || '使用默认目录';
+            notifyVideoInput.value = config.messageNotifyVideo || 'notify-rocket.webm';
+        });
+
+        // ---------- 全局设置折叠 ----------
+        const globalHeader = document.getElementById('globalHeader');
+        const globalBody = document.getElementById('globalBody');
+        globalHeader.addEventListener('click', () => {
+            const open = globalBody.classList.toggle('open');
+            globalHeader.classList.toggle('open', open);
+        });
+
+        // ---------- 全局数字输入清除 invalid ----------
+        [pollIntervalInput, maxCacheItemsInput, notifyVideoInput].forEach((el) => {
+            el.addEventListener('input', () => el.classList.remove('invalid'));
+        });
+
+        // ---------- 添加接口源 ----------
+        document.getElementById('addSourceBtn').addEventListener('click', () => {
+            addSourceCard({ id: genSourceId(), name: '', listUrl: '', authHeaders: '{}', enabled: true }, true);
+        });
+
+        // ---------- 小火箭素材目录 ----------
+        document.getElementById('pickNotifyDirBtn').addEventListener('click', () => {
+            window.electronAPI.pickWebmDir();
+        });
+        window.electronAPI.onWebmDirPicked((dir) => {
+            messageNotifyDir = dir;
+            notifyDirHint.textContent = dir || '使用默认目录';
+        });
+        document.getElementById('clearNotifyDirBtn').addEventListener('click', () => {
+            messageNotifyDir = '';
+            notifyDirHint.textContent = '使用默认目录';
+        });
+
+        // ---------- 接口规范下载 ----------
+        document.getElementById('downloadApiSpecBtn').addEventListener('click', () => {
+            window.electronAPI.downloadMessageApiSpec();
+        });
+        window.electronAPI.onDownloadMessageApiSpecResult((result) => {
+            if (result && result.success) {
+                showStatus('接口规范已下载 ✓', 'success');
+            } else if (result && result.canceled) {
+                return;
+            } else {
+                showStatus((result && result.error) || '下载失败', 'error');
+            }
+        });
+
+        // ---------- 校验 ----------
+        function clearAllInvalid() {
+            sourceCards.forEach((c) => {
+                c.nameInput.classList.remove('invalid');
+                c.urlInput.classList.remove('invalid');
+                c.headersInput.classList.remove('invalid');
+            });
+            pollIntervalInput.classList.remove('invalid');
+            maxCacheItemsInput.classList.remove('invalid');
+            notifyVideoInput.classList.remove('invalid');
+        }
+
+        function validate() {
+            clearAllInvalid();
+            let valid = true;
+            let firstError = '';
+
+            // 逐源校验：名称非空 + headers 合法 JSON 对象 + 启用源必须合法 http/https URL
+            for (let i = 0; i < sourceCards.length; i++) {
+                const c = sourceCards[i];
+                const name = c.nameInput.value.trim();
+                const listUrl = c.urlInput.value.trim();
+                const headers = c.headersInput.value.trim() || '{}';
+                const isEnabled = c.enabledBox.checked;
+
+                if (!name) {
+                    c.nameInput.classList.add('invalid');
+                    valid = false;
+                    if (!firstError) firstError = '第 ' + (i + 1) + ' 个接口源名称不能为空';
+                }
+                if (!isJsonObject(headers)) {
+                    c.headersInput.classList.add('invalid');
+                    expandHeaders(c);
+                    valid = false;
+                    if (!firstError) firstError = '「' + (name || ('第 ' + (i + 1) + ' 个源')) + '」的请求头必须是 JSON 对象';
+                }
+                if (isEnabled && !isHttpUrl(listUrl)) {
+                    c.urlInput.classList.add('invalid');
+                    valid = false;
+                    if (!firstError) firstError = '「' + (name || ('第 ' + (i + 1) + ' 个源')) + '」的接口地址必须是 http 或 https URL';
+                }
+            }
+
+            // 全局数字范围（同现状）
+            const pollInterval = parseInt(pollIntervalInput.value, 10);
+            const maxCacheItems = parseInt(maxCacheItemsInput.value, 10);
+            let globalInvalid = false;
+            if (!pollInterval || pollInterval < 10 || pollInterval > 3600) {
+                pollIntervalInput.classList.add('invalid');
+                valid = false; globalInvalid = true;
+                if (!firstError) firstError = '轮询间隔需在 10-3600 秒之间';
+            }
+            if (!maxCacheItems || maxCacheItems < 1 || maxCacheItems > 30) {
+                maxCacheItemsInput.classList.add('invalid');
+                valid = false; globalInvalid = true;
+                if (!firstError) firstError = '每源待办条数需在 1-30 之间';
+            }
+            const notifyVideo = notifyVideoInput.value.trim() || 'notify-rocket.webm';
+            if (!notifyVideo || /[\\/]/.test(notifyVideo)) {
+                notifyVideoInput.classList.add('invalid');
+                valid = false; globalInvalid = true;
+                if (!firstError) firstError = '小火箭素材只能填写文件名，不能包含路径分隔符';
+            }
+
+            // 全局设置出错时展开折叠区，方便用户看到高亮
+            if (globalInvalid) {
+                globalBody.classList.add('open');
+                globalHeader.classList.add('open');
+            }
+
+            return { valid, firstError };
+        }
+
+        function collectSources() {
+            return sourceCards.map((c) => ({
+                id: c.id,
+                name: c.nameInput.value.trim(),
+                listUrl: c.urlInput.value.trim(),
+                authHeaders: c.headersInput.value.trim() || '{}',
+                enabled: c.enabledBox.checked
+            }));
+        }
+
+        // ---------- 保存 ----------
+        window.electronAPI.onSaveConfigResult((result) => {
+            if (result && result.success) {
+                showStatus('保存成功 ✓', 'success');
+            } else {
+                showStatus((result && result.error) || '保存失败', 'error');
+            }
+        });
+
+        document.getElementById('saveBtn').addEventListener('click', () => {
+            const { valid, firstError } = validate();
+            if (!valid) {
+                showStatus(firstError || '请检查消息提醒配置', 'error');
+                return;
+            }
+            window.electronAPI.saveConfig({
+                messageNotifyEnabled: enabledInput.checked,
+                messageSources: collectSources(),
+                messagePollInterval: parseInt(pollIntervalInput.value, 10),
+                messageMaxCacheItems: parseInt(maxCacheItemsInput.value, 10),
+                messageNotifyDir: messageNotifyDir,
+                messageNotifyVideo: notifyVideoInput.value.trim() || 'notify-rocket.webm'
+            });
+        });
+
+        // ---------- 取消 ----------
+        document.getElementById('cancelBtn').addEventListener('click', () => {
+            window.electronAPI.closeSettings();
+        });
+    </script>
+</body>
+</html>

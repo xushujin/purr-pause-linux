@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=胖猫暂停一下（PurrPause）
+Comment=胖猫暂停一下 - 屏幕休息提醒
+Exec=electron /mola/genai/src/purr-pause/main.js
+Icon=/mola/genai/src/purr-pause/assets/images/tray-icon.png
+Hidden=false
+NoDisplay=false
+X-GNOME-Autostart-enabled=true
+Categories=Utility;

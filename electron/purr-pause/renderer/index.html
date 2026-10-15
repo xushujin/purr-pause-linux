@@ -1,0 +1,588 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>胖猫暂停一下（PurrPause）</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        html, body {
+            overflow: hidden;
+            height: 100vh;
+            background: transparent;
+            font-family: system-ui, -apple-system, sans-serif;
+        }
+
+        .cat-container {
+            position: fixed;
+            z-index: 100;
+            pointer-events: none;
+            display: none;
+            transform-origin: center center;
+            will-change: transform;
+            contain: layout style;
+        }
+
+        .cat-video {
+            height: 200px;
+            display: block;
+        }
+
+        .cat-idle {
+            position: fixed;
+            z-index: 100;
+            pointer-events: none;
+            display: none;
+            will-change: transform, opacity;
+        }
+
+        .cat-idle video {
+            display: block;
+        }
+
+        .cat-overlay {
+            position: fixed;
+            left: 0;
+            right: 0;
+            bottom: 40px;
+            z-index: 101;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 24px;
+            opacity: 0;
+            visibility: hidden;
+            pointer-events: none;
+            transition: opacity 1s ease, visibility 0s 1s;
+        }
+
+        .cat-overlay.visible {
+            opacity: 1;
+            visibility: visible;
+            pointer-events: all;
+            transition: opacity 1s ease, visibility 0s 0s;
+        }
+
+        .cat-overlay .countdown {
+            color: #fff;
+            font-size: 1.2rem;
+            font-weight: 600;
+            text-shadow: 0 2px 8px rgba(0,0,0,0.7);
+        }
+
+        .cat-overlay .snooze {
+            padding: 12px 32px;
+            background: rgba(0,0,0,0.4);
+            color: #fff;
+            border: 2px solid rgba(255,255,255,0.8);
+            border-radius: 30px;
+            font-size: 1rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+            text-shadow: 0 1px 3px rgba(0,0,0,0.6);
+        }
+
+        .cat-overlay .snooze:hover {
+            transform: scale(1.08);
+            background: rgba(0,0,0,0.5);
+        }
+
+        .cat-overlay .snooze:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .cat-overlay .dismiss {
+            padding: 12px 32px;
+            background: linear-gradient(135deg, #4ade80, #22c55e);
+            color: #fff;
+            border: none;
+            border-radius: 30px;
+            font-size: 1.1rem;
+            font-weight: 700;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+            box-shadow: 0 4px 20px rgba(34, 197, 94, 0.4);
+            letter-spacing: 0.5px;
+        }
+
+        .cat-overlay .dismiss:hover {
+            transform: scale(1.08);
+            box-shadow: 0 6px 30px rgba(34, 197, 94, 0.6);
+        }
+    </style>
+</head>
+<body>
+    <div class="cat-container" id="catContainer">
+        <video class="cat-video" id="catWalkVideo" muted playsinline></video>
+    </div>
+
+    <div class="cat-idle" id="catIdle">
+        <video class="cat-video" id="catIdleVideo" muted playsinline loop></video>
+    </div>
+
+    <div class="cat-overlay" id="catOverlay">
+        <span class="countdown" id="countdown">休息中 05:00</span>
+        <button class="snooze" id="snoozeBtn">再等 5 分钟</button>
+        <button class="dismiss" id="dismissBtn">精力充沛！</button>
+    </div>
+
+    <script>
+        const catContainer = document.getElementById('catContainer');
+        const catWalkVideo = document.getElementById('catWalkVideo');
+        const catIdle = document.getElementById('catIdle');
+        const catIdleVideo = document.getElementById('catIdleVideo');
+        const overlay = document.getElementById('catOverlay');
+        const dismissBtn = document.getElementById('dismissBtn');
+        const snoozeBtn = document.getElementById('snoozeBtn');
+        const countdownEl = document.getElementById('countdown');
+
+        let currentConfig = {};
+        let countdownInterval = null;
+        let remainingSeconds = 300;
+        let idleShown = false;
+        let dismissed = false;
+        const BASE_CAT_HEIGHT = 200;
+        const MAX_CAT_SCALE = 5;
+        const MAX_SCREEN_HEIGHT_RATIO = 0.85;
+        const MAX_SCREEN_WIDTH_RATIO = 0.9;
+
+        function getVideoAspectRatio(video) {
+            if (video.videoWidth && video.videoHeight) {
+                return video.videoWidth / video.videoHeight;
+            }
+            return 16 / 9;
+        }
+
+        function getConstrainedCatScale(video) {
+            const baseWidth = BASE_CAT_HEIGHT * getVideoAspectRatio(video);
+            return Math.min(
+                (window.innerHeight * MAX_SCREEN_HEIGHT_RATIO) / BASE_CAT_HEIGHT,
+                (window.innerWidth * MAX_SCREEN_WIDTH_RATIO) / baseWidth,
+                MAX_CAT_SCALE
+            );
+        }
+
+        function getBaseCatSize(video) {
+            return {
+                width: BASE_CAT_HEIGHT * getVideoAspectRatio(video),
+                height: BASE_CAT_HEIGHT
+            };
+        }
+
+        function getConstrainedCatSize(video) {
+            const scale = getConstrainedCatScale(video);
+            const aspectRatio = getVideoAspectRatio(video);
+            return {
+                width: BASE_CAT_HEIGHT * aspectRatio * scale,
+                height: BASE_CAT_HEIGHT * scale
+            };
+        }
+
+        function startAnimation(config) {
+            currentConfig = config;
+            idleShown = false;
+            dismissed = false;
+
+            if (config.snoozeCount >= 2) {
+                snoozeBtn.disabled = true;
+                snoozeBtn.textContent = '已用完';
+            } else {
+                snoozeBtn.disabled = false;
+                snoozeBtn.textContent = `再等 5 分钟（${2 - (config.snoozeCount || 0)}次）`;
+            }
+
+            if (countdownInterval) {
+                clearInterval(countdownInterval);
+                countdownInterval = null;
+            }
+
+            catWalkVideo.src = config.videos.walk;
+            catIdleVideo.src = config.videos.idle;
+
+            overlay.style.transition = 'none';
+            overlay.classList.remove('visible');
+            overlay.offsetHeight;
+            overlay.style.transition = '';
+
+            catIdle.style.display = 'none';
+            catIdle.style.opacity = '';
+            catIdle.style.left = '';
+            catIdle.style.top = '';
+            catIdle.style.width = '';
+            catIdle.style.height = '';
+            catIdle.style.transform = '';
+
+            catContainer.style.display = 'none';
+            catContainer.style.opacity = '';
+
+            switch (config.animationMode) {
+                case 'fade-center':
+                    startFadeCenter(config);
+                    break;
+                case 'walk-flat':
+                    startWalkFlat(config);
+                    break;
+                case 'walk-center':
+                    startWalkCenter(config);
+                    break;
+                case 'walk-zoom':
+                default:
+                    startWalkZoom(config);
+                    break;
+            }
+        }
+
+        // Mode 1: walk-zoom (original behavior)
+        function startWalkZoom(config) {
+            catContainer.style.display = 'block';
+            catContainer.style.right = '-220px';
+            catContainer.style.bottom = '48px';
+            catContainer.style.transform = 'scale(0.4)';
+
+            catWalkVideo.load();
+            catIdleVideo.load();
+
+            let started = false;
+            function beginWalk() {
+                if (started) return;
+                started = true;
+                catWalkVideo.play();
+                requestAnimationFrame(() => walkZoom());
+            }
+
+            catWalkVideo.addEventListener('loadedmetadata', beginWalk, { once: true });
+            setTimeout(() => { if (!started) { started = true; showIdle(); } }, 5000);
+            catWalkVideo.addEventListener('error', () => { if (!started) { started = true; showIdle(); } }, { once: true });
+            catWalkVideo.onended = () => showIdle();
+        }
+
+        function walkZoom() {
+            const duration = catWalkVideo.duration ? catWalkVideo.duration * 1000 : 3000;
+            const endScale = getConstrainedCatScale(catWalkVideo);
+            const baseSize = getBaseCatSize(catWalkVideo);
+            const targetRight = (window.innerWidth - baseSize.width) / 2;
+            const targetBottom = (window.innerHeight - baseSize.height) / 2;
+            const startRight = -220;
+            const startBottom = 48;
+            const startScale = 0.4;
+            const startTime = performance.now();
+
+            function step(now) {
+                const elapsed = now - startTime;
+                const progress = Math.min(elapsed / duration, 1);
+                const eased = 1 - Math.pow(1 - progress, 3);
+
+                const currentRight = startRight + (targetRight - startRight) * eased;
+                const currentBottom = startBottom + (targetBottom - startBottom) * eased;
+                const currentScale = startScale + (endScale - startScale) * eased;
+
+                catContainer.style.right = currentRight + 'px';
+                catContainer.style.bottom = currentBottom + 'px';
+                catContainer.style.transform = `scale(${currentScale})`;
+
+                if (progress < 1) {
+                    requestAnimationFrame(step);
+                }
+            }
+
+            requestAnimationFrame(step);
+        }
+
+        // Mode 2: fade-center (single video, fade in at center)
+        function startFadeCenter(config) {
+            catContainer.style.display = 'none';
+
+            catIdle.style.display = 'block';
+            catIdle.style.position = 'fixed';
+            catIdle.style.left = '50%';
+            catIdle.style.top = '50%';
+            catIdle.style.width = 'auto';
+            catIdle.style.height = 'auto';
+            catIdle.style.marginLeft = '0';
+            catIdle.style.marginTop = '0';
+            catIdle.style.transform = 'translate(-50%, -50%) scale(0.05)';
+            catIdle.style.opacity = '0';
+
+            catIdleVideo.load();
+            catIdleVideo.currentTime = 0;
+
+            function beginFade() {
+                if (idleShown) return;
+                idleShown = true;
+                const targetSize = getConstrainedCatSize(catIdleVideo);
+                catIdleVideo.removeAttribute('class');
+                catIdleVideo.setAttribute('style', 'width:' + targetSize.width + 'px !important; height:' + targetSize.height + 'px !important; max-width:none !important; max-height:none !important; display:block !important;');
+                catIdleVideo.play().catch(() => {});
+                const duration = 3000;
+                const startTime = performance.now();
+
+                function fadeIn(now) {
+                    const elapsed = now - startTime;
+                    const progress = Math.min(elapsed / duration, 1);
+                    const eased = 1 - Math.pow(1 - progress, 3);
+
+                    const currentScale = 0.05 + (1 - 0.05) * eased;
+                    catIdle.style.transform = 'translate(-50%, -50%) scale(' + currentScale + ')';
+                    catIdle.style.opacity = String(Math.min(eased * 2, 1));
+
+                    if (progress < 1) {
+                        requestAnimationFrame(fadeIn);
+                    } else {
+                        setTimeout(() => {
+                            overlay.classList.add('visible');
+                            setTimeout(() => window.electronAPI.overlayShown(), 1000);
+                            startCountdown();
+                        }, 800);
+                    }
+                }
+
+                requestAnimationFrame(fadeIn);
+            }
+
+            if (catIdleVideo.readyState >= 3) {
+                beginFade();
+            } else {
+                catIdleVideo.addEventListener('canplay', beginFade, { once: true });
+                setTimeout(() => {
+                    if (!idleShown) beginFade();
+                }, 3000);
+            }
+        }
+
+        // Mode 3: walk-flat (walk from right, no scale change)
+        function startWalkFlat(config) {
+            catContainer.style.display = 'block';
+            catContainer.style.right = '-220px';
+            catContainer.style.bottom = `${(window.innerHeight / 2) - 100}px`;
+            catContainer.style.transform = 'scale(0.4)';
+
+            catWalkVideo.load();
+            catIdleVideo.load();
+
+            let started = false;
+            function beginWalk() {
+                if (started) return;
+                started = true;
+                const fixedScale = getConstrainedCatScale(catWalkVideo);
+                catContainer.style.bottom = `${(window.innerHeight - BASE_CAT_HEIGHT) / 2}px`;
+                catContainer.style.transform = `scale(${fixedScale})`;
+                catWalkVideo.play();
+                requestAnimationFrame(() => walkFlat(fixedScale));
+            }
+
+            catWalkVideo.addEventListener('loadedmetadata', beginWalk, { once: true });
+            setTimeout(() => { if (!started) { started = true; showIdle(); } }, 5000);
+            catWalkVideo.addEventListener('error', () => { if (!started) { started = true; showIdle(); } }, { once: true });
+            catWalkVideo.onended = () => showIdle();
+        }
+
+        function walkFlat(fixedScale) {
+            const duration = catWalkVideo.duration ? catWalkVideo.duration * 1000 : 3000;
+            const baseSize = getBaseCatSize(catWalkVideo);
+            const targetRight = (window.innerWidth - baseSize.width) / 2;
+            const startRight = -220;
+            const startTime = performance.now();
+
+            function step(now) {
+                const elapsed = now - startTime;
+                const progress = Math.min(elapsed / duration, 1);
+                const eased = 1 - Math.pow(1 - progress, 3);
+
+                catContainer.style.right = (startRight + (targetRight - startRight) * eased) + 'px';
+
+                if (progress < 1) {
+                    requestAnimationFrame(step);
+                }
+            }
+
+            requestAnimationFrame(step);
+        }
+
+        // Mode 4: walk-center (walk out from screen center)
+        function startWalkCenter(config) {
+            const baseSize = getBaseCatSize(catWalkVideo);
+
+            catContainer.style.display = 'block';
+            catContainer.style.right = ((window.innerWidth - baseSize.width) / 2) + 'px';
+            catContainer.style.bottom = ((window.innerHeight - baseSize.height) / 2) + 'px';
+            catContainer.style.transform = 'scale(0.05)';
+            catContainer.style.opacity = '0';
+
+            catWalkVideo.load();
+            catIdleVideo.load();
+
+            let started = false;
+            function beginWalk() {
+                if (started) return;
+                started = true;
+                const endScale = getConstrainedCatScale(catWalkVideo);
+                const baseSize = getBaseCatSize(catWalkVideo);
+                catContainer.style.right = ((window.innerWidth - baseSize.width) / 2) + 'px';
+                catContainer.style.bottom = ((window.innerHeight - baseSize.height) / 2) + 'px';
+                catWalkVideo.play();
+                requestAnimationFrame(() => walkCenter(endScale));
+            }
+
+            function showCenterIdleFallback() {
+                const endScale = getConstrainedCatScale(catWalkVideo);
+                const baseSize = getBaseCatSize(catWalkVideo);
+                catContainer.style.right = ((window.innerWidth - baseSize.width) / 2) + 'px';
+                catContainer.style.bottom = ((window.innerHeight - baseSize.height) / 2) + 'px';
+                catContainer.style.transform = `scale(${endScale})`;
+                catContainer.style.opacity = '1';
+                showIdle();
+            }
+
+            catWalkVideo.addEventListener('loadedmetadata', beginWalk, { once: true });
+            setTimeout(() => { if (!started) { started = true; showCenterIdleFallback(); } }, 5000);
+            catWalkVideo.addEventListener('error', () => { if (!started) { started = true; showCenterIdleFallback(); } }, { once: true });
+            catWalkVideo.onended = () => showIdle();
+        }
+
+        function walkCenter(endScale) {
+            const duration = catWalkVideo.duration ? catWalkVideo.duration * 1000 : 3000;
+            const startScale = 0.05;
+            const startTime = performance.now();
+
+            function step(now) {
+                const elapsed = now - startTime;
+                const progress = Math.min(elapsed / duration, 1);
+                const eased = 1 - Math.pow(1 - progress, 3);
+                const currentScale = startScale + (endScale - startScale) * eased;
+
+                catContainer.style.transform = `scale(${currentScale})`;
+                catContainer.style.opacity = String(Math.min(eased * 2, 1));
+
+                if (progress < 1) {
+                    requestAnimationFrame(step);
+                }
+            }
+
+            requestAnimationFrame(step);
+        }
+
+        function showIdle() {
+            if (idleShown) return;
+            idleShown = true;
+
+            const rect = catContainer.getBoundingClientRect();
+            catIdle.style.left = rect.left + 'px';
+            catIdle.style.top = rect.top + 'px';
+            catIdle.style.width = rect.width + 'px';
+            catIdle.style.height = rect.height + 'px';
+            catIdleVideo.style.width = '100%';
+            catIdleVideo.style.height = '100%';
+
+            function doSwitch() {
+                catIdle.style.display = 'block';
+                requestAnimationFrame(() => {
+                    catContainer.style.display = 'none';
+                    catWalkVideo.pause();
+                });
+
+                setTimeout(() => {
+                    overlay.classList.add('visible');
+                    setTimeout(() => {
+                        window.electronAPI.overlayShown();
+                    }, 1000);
+                    startCountdown();
+                }, 800);
+            }
+
+            catIdleVideo.currentTime = 0;
+
+            if (catIdleVideo.readyState >= 3) {
+                catIdleVideo.play().catch(() => {});
+                doSwitch();
+            } else {
+                catIdleVideo.addEventListener('canplay', () => {
+                    catIdleVideo.play().catch(() => {});
+                    doSwitch();
+                }, { once: true });
+                setTimeout(() => {
+                    if (catIdle.style.display !== 'block') {
+                        catIdleVideo.play().catch(() => {});
+                        doSwitch();
+                    }
+                }, 2000);
+            }
+        }
+
+        let countdownEndTime = 0;
+
+        function startCountdown() {
+            const totalSeconds = (currentConfig.breakMinutes || 5) * 60;
+            countdownEndTime = Date.now() + totalSeconds * 1000;
+            updateCountdownDisplay();
+            countdownInterval = setInterval(() => {
+                const remaining = Math.round((countdownEndTime - Date.now()) / 1000);
+                if (remaining <= 0) {
+                    clearInterval(countdownInterval);
+                    countdownInterval = null;
+                    countdownEl.textContent = '休息结束！';
+                    setTimeout(() => dismiss(), 1500);
+                } else {
+                    remainingSeconds = remaining;
+                    updateCountdownDisplay();
+                }
+            }, 500);
+        }
+
+        function updateCountdownDisplay() {
+            const min = String(Math.floor(remainingSeconds / 60)).padStart(2, '0');
+            const sec = String(remainingSeconds % 60).padStart(2, '0');
+            countdownEl.textContent = `休息中 ${min}:${sec}`;
+        }
+
+        function dismiss() {
+            if (dismissed) return;
+            dismissed = true;
+
+            if (countdownInterval) {
+                clearInterval(countdownInterval);
+                countdownInterval = null;
+            }
+            overlay.classList.remove('visible');
+
+            const duration = 800;
+            const startTime = performance.now();
+
+            function fadeOut(now) {
+                const elapsed = now - startTime;
+                const progress = Math.min(elapsed / duration, 1);
+                catIdle.style.opacity = String(1 - progress);
+
+                if (progress < 1) {
+                    requestAnimationFrame(fadeOut);
+                } else {
+                    catIdle.style.display = 'none';
+                    catIdle.style.opacity = '';
+                    catIdleVideo.pause();
+                    window.electronAPI.dismiss();
+                }
+            }
+
+            requestAnimationFrame(fadeOut);
+        }
+
+        dismissBtn.addEventListener('click', dismiss);
+
+        snoozeBtn.addEventListener('click', () => {
+            window.electronAPI.snooze();
+        });
+
+        window.electronAPI.onStartAnimation((config) => {
+            startAnimation(config);
+        });
+    </script>
+</body>
+</html>

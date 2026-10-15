@@ -70,7 +70,12 @@ fn main() {
 
     // 注意：hold() 已移出本闭包（见下方 main 作用域），
     // 故此处参数不再使用，用 `_app` 避免 unused_variables 警告。
-    app.connect_activate(|_app| {
+    // ⚠️ 初始化放在 startup（**只跑一次**），不要放回 connect_activate。
+    //
+    // GApplication 在**每次**被激活时都会发 activate —— 包括第二个实例通过
+    // D-Bus 转发过来的激活。原先整段初始化写在 activate 里，导致用户再点一次
+    // 图标就会把一切重来一遍：重复的计时器、重复的消息轮询、重复的托盘。
+    app.connect_startup(|_app| {
         let data_dir = config::data_dir();
         let _ = std::fs::create_dir_all(&data_dir);
         let log_dir = data_dir.join("logs");
@@ -133,6 +138,35 @@ fn main() {
         build_tray(&state);
         start_monitoring(&state);
         start_message_poll(&state);
+
+        // 供 activate 回调取用（见下方 connect_activate）
+        STATE.with(|s| *s.borrow_mut() = Some(state.clone()));
+    });
+
+    // activate 在每次被激活时触发，包括「用户又启动了一次」。
+    //
+    // 语义：
+    //   - 首次激活（紧随 startup 之后的那次）→ 什么都不做，静默进驻，
+    //     与 electron 版一致（启动时不弹任何窗口）。
+    //   - 之后的激活 = 用户想跟应用打交道 → 打开设置窗口。
+    //
+    // ⚠️ 这条入口是**托盘不可用时的兜底**。electron 版靠托盘菜单进入各窗口，
+    //    而 native 的托盘（D-Bus StatusNotifierItem）尚未实现，若不放这条入口，
+    //    用户装完之后没有任何办法打开设置/激活 —— 等于应用不可用。
+    //    托盘落地后这条可以保留（无害，且对无托盘的 GNOME 是唯一入口）。
+    let first_activate = Rc::new(std::cell::Cell::new(true));
+    app.connect_activate(move |_app| {
+        if first_activate.replace(false) {
+            return;
+        }
+        let Some(state) = STATE.with(|s| s.borrow().clone()) else {
+            return;
+        };
+        if license::check_status().status == LicenseStatus::Expired {
+            show_activation(&state);
+        } else {
+            open_settings(&state);
+        }
     });
 
     // 防止无窗口时应用立即退出。
@@ -587,6 +621,9 @@ fn build_tray(state: &Rc<RefCell<AppState>>) {
 
 thread_local! {
     static TRAY: RefCell<Option<Tray>> = const { RefCell::new(None) };
+    /// 已初始化的应用状态，startup 时写入。
+    /// 供 connect_activate 使用（「再次启动 → 打开设置」这条入口）。
+    static STATE: RefCell<Option<Rc<RefCell<AppState>>>> = const { RefCell::new(None) };
 }
 
 fn build_tray_items(state: &Rc<RefCell<AppState>>) -> Vec<TrayItem> {

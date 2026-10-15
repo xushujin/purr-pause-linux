@@ -1,0 +1,604 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>胖猫暂停一下（PurrPause） - 技术开发文档</title>
+    <style>
+        :root {
+            --orange-50: #fff7ed;
+            --orange-100: #ffedd5;
+            --orange-200: #fed7aa;
+            --orange-300: #fdba74;
+            --orange-400: #fb923c;
+            --orange-500: #f97316;
+            --orange-600: #ea580c;
+            --orange-700: #c2410c;
+            --orange-800: #9a3412;
+            --orange-900: #7c2d12;
+            --gray-50: #f9fafb;
+            --gray-100: #f3f4f6;
+            --gray-200: #e5e7eb;
+            --gray-700: #374151;
+            --gray-800: #1f2937;
+            --gray-900: #111827;
+        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans SC", sans-serif;
+            line-height: 1.8;
+            color: var(--gray-800);
+            background: var(--gray-50);
+            padding: 0;
+        }
+        .header {
+            background: linear-gradient(135deg, var(--orange-500), var(--orange-600));
+            color: white;
+            padding: 48px 32px;
+            text-align: center;
+        }
+        .header h1 {
+            font-size: 2.2rem;
+            margin-bottom: 8px;
+        }
+        .header p {
+            opacity: 0.9;
+            font-size: 1.1rem;
+        }
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 40px 32px;
+        }
+        h2 {
+            color: var(--orange-700);
+            font-size: 1.6rem;
+            margin-top: 48px;
+            margin-bottom: 16px;
+            padding-bottom: 8px;
+            border-bottom: 2px solid var(--orange-200);
+        }
+        h3 {
+            color: var(--orange-800);
+            font-size: 1.2rem;
+            margin-top: 32px;
+            margin-bottom: 12px;
+        }
+        h4 {
+            color: var(--gray-700);
+            font-size: 1.05rem;
+            margin-top: 24px;
+            margin-bottom: 8px;
+        }
+        p { margin-bottom: 12px; }
+        ul, ol {
+            margin-bottom: 12px;
+            padding-left: 24px;
+        }
+        li { margin-bottom: 6px; }
+        code {
+            background: var(--orange-50);
+            border: 1px solid var(--orange-200);
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 0.9em;
+            font-family: "JetBrains Mono", "Fira Code", monospace;
+        }
+        pre {
+            background: var(--gray-900);
+            color: #e5e7eb;
+            padding: 20px 24px;
+            border-radius: 8px;
+            overflow-x: auto;
+            margin: 16px 0;
+            font-size: 0.88rem;
+            line-height: 1.6;
+        }
+        pre code {
+            background: none;
+            border: none;
+            padding: 0;
+            color: inherit;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 16px 0;
+            font-size: 0.92rem;
+        }
+        th {
+            background: var(--orange-100);
+            color: var(--orange-800);
+            padding: 10px 14px;
+            text-align: left;
+            font-weight: 600;
+        }
+        td {
+            padding: 10px 14px;
+            border-bottom: 1px solid var(--gray-200);
+        }
+        tr:hover td { background: var(--orange-50); }
+        .arch-diagram {
+            background: white;
+            border: 1px solid var(--orange-200);
+            border-radius: 8px;
+            padding: 20px;
+            margin: 16px 0;
+            overflow-x: auto;
+        }
+        .arch-diagram pre {
+            background: white;
+            color: var(--gray-800);
+            padding: 0;
+            margin: 0;
+            font-size: 0.82rem;
+        }
+        .note {
+            background: var(--orange-50);
+            border-left: 4px solid var(--orange-400);
+            padding: 12px 16px;
+            margin: 16px 0;
+            border-radius: 0 8px 8px 0;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>胖猫暂停一下（PurrPause） 技术开发文档</h1>
+        <p>胖猫暂停一下（PurrPause）- Electron 桌面应用架构与实现</p>
+    </div>
+    <div class="container">
+
+        <h2>1. 项目概述</h2>
+        <p>胖猫暂停一下（PurrPause） 是一款基于 Electron 的桌面应用程序，运行于 Linux、macOS 和 Windows 系统。当用户连续使用电脑超过设定时间后，一只胖猫会走上屏幕，提醒用户休息。</p>
+        <ul>
+            <li><strong>应用名称</strong>: 胖猫暂停一下（PurrPause）</li>
+            <li><strong>版本</strong>: 1.4.0</li>
+            <li><strong>许可证</strong>: MIT</li>
+            <li><strong>应用 ID</strong>: com.purr-pause.app</li>
+        </ul>
+
+        <h2>2. 架构概述</h2>
+        <h3>2.1 Electron 进程模型</h3>
+        <p>应用采用 Electron 标准的多进程架构：</p>
+        <div class="arch-diagram">
+<pre>
+┌─────────────────────────────────────────────┐
+│              Main Process (主进程)            │
+│  main.js                                     │
+│  - 空闲检测                                   │
+│  - 配置管理                                   │
+│  - 系统托盘                                   │
+│  - 窗口管理                                   │
+│  - 多显示器处理                               │
+└──────────┬──────────────────┬───────────────┘
+           │ IPC              │ IPC
+┌──────────▼──────┐  ┌───────▼───────────────┐
+│ Renderer (动画)  │  │ Renderer (设置窗口)    │
+│ index.html       │  │ settings.html          │
+│ - 猫咪动画播放   │  │ - 参数配置界面          │
+│ - 倒计时显示     │  │ - 保存/取消操作         │
+│ - 用户交互       │  │                        │
+└─────────────────┘  └────────────────────────┘
+           │
+┌──────────▼──────┐
+│ Preload Bridge   │
+│ preload.js       │
+│ - contextBridge  │
+│ - 安全 IPC 暴露  │
+└─────────────────┘
+</pre>
+        </div>
+
+        <h3>2.2 安全模型</h3>
+        <ul>
+            <li><code>contextIsolation: true</code> — 渲染进程与 Node.js 环境完全隔离</li>
+            <li><code>nodeIntegration: false</code> — 渲染进程无法直接访问 Node.js API</li>
+            <li>通过 <code>contextBridge</code> 仅暴露必要的 API 接口</li>
+        </ul>
+
+        <h3>2.3 单实例锁</h3>
+        <p>应用启动时通过 <code>app.requestSingleInstanceLock()</code> 确保同一时间只有一个实例运行。若已有实例在运行，新启动进程会在入口处直接 <code>app.exit(0)</code>，不会创建窗口、托盘或启动监控逻辑。</p>
+
+        <h2>3. 文件结构</h2>
+<pre><code>purr-pause/
+├── main.js                  # 主进程入口
+├── preload.js               # 预加载脚本（IPC 桥接）
+├── config.json              # 默认配置文件
+├── package.json             # 项目配置与构建脚本
+├── lib/
+│   ├── license.js           # 序列号验证与激活管理
+│   ├── logger.js            # 日志记录
+│   └── message-notify.js    # 消息提醒（小火箭）轮询与通知
+├── tools/
+│   ├── keygen.js            # 序列号生成器（开发者用）
+│   ├── uninstall-linux.sh   # Linux 卸载脚本
+│   ├── uninstall-mac.sh     # macOS 卸载脚本
+│   └── uninstall-windows.ps1 # Windows 卸载脚本
+├── renderer/
+│   ├── index.html           # 猫咪动画渲染页面
+│   ├── settings.html        # 设置界面
+│   ├── activation.html      # 激活窗口
+│   ├── rules.html           # 计时规则说明窗口
+│   ├── message-list.html    # 待办消息列表窗口
+│   ├── message-settings.html # 消息提醒设置窗口
+│   └── rocket-demo.html     # 小火箭消息提醒动画窗口
+├── assets/
+│   ├── webm/                # 内置视频素材
+│   │   ├── cat-walk.webm    # 猫走路动画
+│   │   └── cat-rest.webm    # 猫休息动画
+│   └── images/
+│       ├── logo.png         # 应用 logo 源图
+│       └── tray-icon.png    # 系统托盘图标
+├── build/
+│   └── icons/               # 应用图标（多平台）
+└── docs/                    # 文档目录</code></pre>
+
+        <h2>4. 核心模块</h2>
+
+        <h3>4.1 空闲检测 (Idle Detection)</h3>
+        <h4>检测方法优先级</h4>
+        <p>应用启动时通过 <code>detectIdleMethod()</code> 自动检测可用的空闲时间获取方式：</p>
+        <p><strong>Linux:</strong></p>
+        <ol>
+            <li><strong>xprintidle</strong> (优先) — X11 环境下的轻量级工具</li>
+            <li><strong>gdbus (GNOME Mutter)</strong> — 通过 D-Bus 调用 GNOME 桌面的 IdleMonitor</li>
+            <li><strong>降级处理</strong> — 若两者均不可用，空闲时间始终返回 0</li>
+        </ol>
+        <p><strong>macOS:</strong> <code>ioreg</code> 读取 <code>HIDIdleTime</code>。</p>
+        <p><strong>Windows:</strong> PowerShell + Win32 API <code>GetLastInputInfo</code>。</p>
+
+        <h4>监控逻辑</h4>
+<pre><code>// 每 10 秒检测一次
+monitorInterval = setInterval(() =&gt; {
+  getIdleTimeMs((idleMs) =&gt; {
+    // 空闲超过 10 分钟 → 重置计时器（视为已休息）
+    if (idleMs &gt; 10 * 60 * 1000) {
+      activeSeconds = 0;
+      return;
+    }
+    // 空闲 &lt; 3 分钟 → 活跃，累加 10 秒
+    // 3~10 分钟 → 不累加也不归零（暂停）
+    // 达到阈值 → 触发猫咪动画
+  });
+}, 10000);</code></pre>
+
+        <h4>活跃时间计算规则</h4>
+        <table>
+            <tr><th>优先级</th><th>条件</th><th>行为</th></tr>
+            <tr><td>1</td><td>动画正在显示</td><td>跳过，不检测</td></tr>
+            <tr><td>2</td><td>用户手动暂停监控</td><td>跳过，不检测</td></tr>
+            <tr><td>3</td><td>屏幕已锁定</td><td>跳过，不检测；解锁时若锁屏超过 10 分钟则计时归零</td></tr>
+            <tr><td>4</td><td>系统休眠后唤醒</td><td>休眠超过 10 分钟则计时归零；短时休眠继续累计</td></tr>
+            <tr><td>5</td><td>距上次鼠标/键盘操作 &gt; 10 分钟</td><td>计时归零（视为已休息）</td></tr>
+            <tr><td>6</td><td>距上次鼠标/键盘操作 &lt; 3 分钟</td><td>计时 +10 秒（视为活跃）</td></tr>
+            <tr><td>7</td><td>距上次鼠标/键盘操作 3~10 分钟</td><td>不累加也不归零（暂停）</td></tr>
+            <tr><td>8</td><td>累计活跃时间 ≥ 设定阈值</td><td>触发猫咪动画</td></tr>
+        </table>
+
+        <h4>锁屏检测</h4>
+        <ul>
+            <li>Linux：通过 D-Bus 监听 <code>org.gnome.ScreenSaver.ActiveChanged</code> 信号。</li>
+            <li>macOS：优先使用 Electron <code>powerMonitor</code> 的 <code>lock-screen</code> / <code>unlock-screen</code> 事件，每 5 秒轮询 <code>Quartz.CGSessionCopyCurrentDictionary</code>，降级时直接解析 <code>ioreg</code> 输出。</li>
+            <li>Windows：优先使用 Electron <code>powerMonitor</code> 的 <code>lock-screen</code> / <code>unlock-screen</code> 事件，每 5 秒轮询检测 <code>LogonUI</code> 进程。</li>
+        </ul>
+
+        <h4>系统休眠/唤醒</h4>
+        <p>应用通过 Electron <code>powerMonitor</code> 监听 <code>suspend</code> / <code>resume</code> 事件。休眠前会清理挂起中的空闲检测；唤醒后会重新探测空闲检测方式，并重新确认当前锁屏状态。休眠超过 10 分钟时，按“已休息”处理并将计时归零；短时间休眠则保留休眠前累计时间并继续计时。</p>
+        <p>macOS 下原先的 <code>ioreg | grep -c CGSSessionScreenLockedTime</code> 降级检测在未锁屏时会因 <code>grep</code> 返回非 0 状态而跳过解锁更新，可能导致 <code>isScreenLocked</code> 长期停留在 <code>true</code>。当前实现改为直接解析 <code>ioreg</code> 输出，未找到锁屏字段时会明确恢复为未锁屏。</p>
+
+        <h3>4.2 视频动画系统</h3>
+        <h4>动画模式</h4>
+        <p>应用支持四种动画模式，通过配置项 <code>animationMode</code> 控制：</p>
+        <table>
+            <tr><th>模式</th><th>值</th><th>说明</th></tr>
+            <tr><td>右下角走出</td><td><code>walk-zoom</code></td><td>从右下角走入，边走边放大到屏幕中央</td></tr>
+            <tr><td>中央淡入</td><td><code>fade-center</code></td><td>在屏幕中央由小变大淡入，最终按屏幕宽高自适应</td></tr>
+            <tr><td>右侧走出</td><td><code>walk-flat</code></td><td>以固定大小从右侧走到屏幕中央，不缩放</td></tr>
+            <tr><td>中央走出</td><td><code>walk-center</code></td><td>在屏幕中央播放走路动画，由小到大走出（默认）</td></tr>
+        </table>
+        <p>动画模式切换为激活用户专属功能。</p>
+
+        <h4>动画流程（walk-zoom 模式）</h4>
+        <div class="note">触发 → 创建全屏透明窗口 → 加载 walk 视频 → 播放走路动画 → walk 视频结束 → 切换到 idle 视频（循环） → 显示倒计时覆盖层 → 倒计时结束或用户点击 → 淡出动画 → 关闭窗口 → 重置计时器</div>
+        <h4>动画流程（fade-center 模式）</h4>
+        <div class="note">触发 → 创建全屏透明窗口 → 加载 idle 视频 → 在屏幕中央从 scale(0.05) 放大到 scale(1)，同时淡入（3 秒）→ 显示倒计时覆盖层 → 倒计时结束或用户点击 → 淡出动画 → 关闭窗口 → 重置计时器</div>
+        <h4>动画流程（walk-flat 模式）</h4>
+        <div class="note">触发 → 创建全屏透明窗口 → 加载 walk 视频 → 以固定大小从右侧走入 → walk 视频结束 → 切换到 idle 视频（循环） → 显示倒计时覆盖层 → 倒计时结束或用户点击 → 淡出动画 → 关闭窗口 → 重置计时器</div>
+        <h4>动画流程（walk-center 模式）</h4>
+        <div class="note">触发 → 创建全屏透明窗口 → 加载 walk 视频 → 在屏幕中央由小到大走出 → walk 视频结束 → 切换到 idle 视频（循环） → 显示倒计时覆盖层 → 倒计时结束或用户点击 → 淡出动画 → 关闭窗口 → 重置计时器</div>
+
+        <h4>走路动画 (walkZoom / walkFlat / walkCenter)</h4>
+        <ul>
+            <li><code>walk-zoom</code> 起始位置：屏幕右侧外偏下 (<code>right: -220px, bottom: 48px</code>)</li>
+            <li><code>walk-flat</code> 起始位置：屏幕右侧外，垂直居中</li>
+            <li><code>walk-center</code> 起始位置：屏幕中央</li>
+            <li>目标位置：屏幕中央</li>
+            <li><code>walk-zoom</code> 缩放：从 0.4 逐渐放大至同时满足屏幕高度 85% 与屏幕宽度 90% 的比例（最大 5x）</li>
+            <li><code>walk-flat</code> 缩放：固定为同时满足屏幕高度 85% 与屏幕宽度 90% 的比例（最大 5x）</li>
+            <li><code>walk-center</code> 缩放：固定在屏幕中央，从 0.05 逐渐放大至同时满足屏幕高度 85% 与屏幕宽度 90% 的比例（最大 5x），同时淡入</li>
+            <li>缓动函数：<code>1 - Math.pow(1 - progress, 3)</code> (ease-out cubic)</li>
+            <li>动画时长：与 walk 视频时长同步</li>
+        </ul>
+
+        <h4>空闲动画 (showIdle)</h4>
+        <ul>
+            <li>无缝衔接 walk 动画的最终位置和尺寸</li>
+            <li>循环播放 idle 视频</li>
+            <li>800ms 后显示操作覆盖层</li>
+        </ul>
+
+        <h4>消失动画 (dismiss)</h4>
+        <ul>
+            <li>800ms 淡出效果</li>
+            <li>清理视频资源释放内存</li>
+        </ul>
+
+        <h3>4.3 配置管理</h3>
+        <h4>配置文件优先级</h4>
+        <ol>
+            <li>用户配置：<code>~/.config/purr-pause/config.json</code></li>
+            <li>默认配置：应用内置 <code>config.json</code></li>
+        </ol>
+        <p>应用显示名为“胖猫暂停一下”，但主进程显式将 <code>userData</code> 固定到 appData 下的 <code>purr-pause</code> 目录，避免品牌显示名变化导致配置、日志和授权文件迁移。</p>
+
+        <h4>配置项</h4>
+        <table>
+            <tr><th>字段</th><th>类型</th><th>默认值</th><th>范围</th><th>说明</th></tr>
+            <tr><td><code>thresholdMinutes</code></td><td>number</td><td>45</td><td>1-480</td><td>连续使用多久后触发提醒</td></tr>
+            <tr><td><code>breakMinutes</code></td><td>number</td><td>5</td><td>1-60</td><td>休息倒计时时长</td></tr>
+            <tr><td><code>animationMode</code></td><td>string</td><td>walk-center</td><td>walk-zoom / fade-center / walk-flat / walk-center</td><td>动画模式（仅激活用户）</td></tr>
+            <tr><td><code>walkVideo</code></td><td>string</td><td>cat-walk.webm</td><td>—</td><td>走路动画文件名</td></tr>
+            <tr><td><code>idleVideo</code></td><td>string</td><td>cat-rest.webm</td><td>—</td><td>休息动画文件名</td></tr>
+            <tr><td><code>customWebmDir</code></td><td>string</td><td>""</td><td>—</td><td>自定义素材目录路径（仅激活用户）</td></tr>
+            <tr><td><code>messageNotifyEnabled</code></td><td>boolean</td><td>false</td><td>—</td><td>是否启用消息提醒（小火箭）</td></tr>
+            <tr><td><code>messageApiBaseUrl</code></td><td>string</td><td>""</td><td>—</td><td>消息接口基础地址（兼容旧配置）</td></tr>
+            <tr><td><code>messageAuthHeaders</code></td><td>string</td><td>"{}"</td><td>—</td><td>消息接口请求头 JSON（兼容旧配置）</td></tr>
+            <tr><td><code>messageSources</code></td><td>array</td><td>[]</td><td>—</td><td>消息接口源列表（名称/地址/请求头/启用）</td></tr>
+            <tr><td><code>messagePollInterval</code></td><td>number</td><td>60</td><td>10-3600</td><td>消息轮询间隔（秒）</td></tr>
+            <tr><td><code>messageMaxCacheItems</code></td><td>number</td><td>30</td><td>1-30</td><td>消息本地缓存条数上限</td></tr>
+            <tr><td><code>messageNotifyDir</code></td><td>string</td><td>""</td><td>—</td><td>小火箭素材目录</td></tr>
+            <tr><td><code>messageNotifyVideo</code></td><td>string</td><td>notify-rocket.webm</td><td>—</td><td>小火箭动画文件名</td></tr>
+            <tr><td><code>messageNotifyAnimation</code></td><td>string</td><td>rocket-corner</td><td>—</td><td>小火箭动画模式</td></tr>
+        </table>
+
+        <h4>配置保存</h4>
+        <p>配置通过 IPC 从设置窗口传递到主进程，经过范围校验后写入用户配置目录。</p>
+
+        <h3>4.4 系统托盘集成</h3>
+        <h4>托盘功能</h4>
+        <ul>
+            <li>显示应用图标（22x22 像素）</li>
+            <li>Tooltip 显示 "胖猫暂停一下（PurrPause）"</li>
+            <li>菜单显示激活状态、距下次休息剩余时间、待办消息（未读数）、消息提醒设置、暂停监控、激活/续期、设置、计时规则、查看日志、小火箭演示、立即测试、重置计时、版本号和退出。</li>
+        </ul>
+
+        <h4>托盘图标路径</h4>
+        <ul>
+            <li>开发模式：<code>./assets/images/tray-icon.png</code></li>
+            <li>打包模式：<code>{resourcesPath}/assets/images/tray-icon.png</code></li>
+        </ul>
+
+        <h2>5. IPC 通信流</h2>
+        <h3>5.1 通信通道</h3>
+        <table>
+            <tr><th>通道名</th><th>方向</th><th>用途</th></tr>
+            <tr><td><code>start-animation</code></td><td>Main → Renderer</td><td>触发猫咪动画，传递配置和视频路径</td></tr>
+            <tr><td><code>overlay-shown</code></td><td>Renderer → Main</td><td>覆盖层显示完成，启用鼠标事件</td></tr>
+            <tr><td><code>dismissed</code></td><td>Renderer → Main</td><td>用户关闭了提醒</td></tr>
+            <tr><td><code>snooze</code></td><td>Renderer → Main</td><td>用户点击"再等 5 分钟"</td></tr>
+            <tr><td><code>load-config</code></td><td>Main → Settings</td><td>向设置窗口发送当前配置（含 <code>_isActivated</code>、<code>_autoLaunch</code>）</td></tr>
+            <tr><td><code>save-config</code></td><td>Settings → Main</td><td>保存新配置</td></tr>
+            <tr><td><code>close-settings</code></td><td>Settings → Main</td><td>关闭设置窗口</td></tr>
+            <tr><td><code>pick-webm-dir</code></td><td>Settings → Main</td><td>请求选择素材目录</td></tr>
+            <tr><td><code>webm-dir-picked</code></td><td>Main → Settings</td><td>返回选择的目录路径</td></tr>
+            <tr><td><code>activate</code></td><td>Activation → Main</td><td>提交序列号激活</td></tr>
+            <tr><td><code>skip-activation</code></td><td>Activation → Main</td><td>跳过激活</td></tr>
+            <tr><td><code>license-status</code></td><td>Main → Activation</td><td>发送许可证状态和机器码</td></tr>
+            <tr><td><code>activation-result</code></td><td>Main → Activation</td><td>返回激活结果</td></tr>
+            <tr><td><code>save-config-result</code></td><td>Main → Settings</td><td>返回配置保存结果</td></tr>
+            <tr><td><code>download-message-api-spec</code></td><td>Settings → Main</td><td>请求下载消息提醒接口规范</td></tr>
+            <tr><td><code>download-message-api-spec-result</code></td><td>Main → Settings</td><td>返回接口规范下载结果</td></tr>
+            <tr><td><code>refresh-messages</code></td><td>Renderer → Main</td><td>手动刷新消息列表</td></tr>
+            <tr><td><code>open-message-target</code></td><td>Renderer → Main</td><td>打开指定消息的目标链接</td></tr>
+            <tr><td><code>dismiss-message-notification</code></td><td>Renderer → Main</td><td>关闭小火箭消息通知</td></tr>
+            <tr><td><code>test-message-connection</code> / <code>test-message-connection-result</code></td><td>双向</td><td>测试消息接口连通性</td></tr>
+            <tr><td><code>messages-state</code></td><td>Main → Renderer</td><td>推送消息列表状态</td></tr>
+        </table>
+
+        <h3>5.2 Preload 暴露的 API</h3>
+<pre><code>window.electronAPI = {
+  onStartAnimation(callback)  // 监听动画启动
+  overlayShown()              // 通知覆盖层已显示
+  dismiss()                   // 通知已关闭
+  snooze()                    // 请求延后 5 分钟
+  onLoadConfig(callback)      // 监听配置加载（含 _isActivated、_autoLaunch 标志）
+  saveConfig(config)          // 发送保存配置
+  closeSettings()             // 请求关闭设置窗口
+  pickWebmDir()               // 请求选择素材目录
+  onWebmDirPicked(callback)   // 监听目录选择结果
+  activate(serial)            // 发送激活请求
+  skipActivation()            // 跳过激活
+  onActivationResult(callback) // 监听激活结果
+  onLicenseStatus(callback)   // 监听许可证状态（含 machineId）
+  onSaveConfigResult(callback) // 监听配置保存结果
+  downloadMessageApiSpec()    // 请求下载消息提醒接口规范
+  onDownloadMessageApiSpecResult(callback) // 监听接口规范下载结果
+  onMessagesState(callback)   // 监听消息列表状态
+  refreshMessages()           // 手动刷新消息
+  openMessageTarget(id)       // 打开消息目标链接
+  dismissMessageNotification() // 关闭小火箭消息通知
+  testMessageConnection(config) // 测试消息接口连通性
+  onTestMessageConnectionResult(callback) // 监听测试结果
+}</code></pre>
+
+        <h2>6. 多显示器处理</h2>
+        <ul>
+            <li>使用 <code>screen.getAllDisplays()</code> 获取所有显示器</li>
+            <li>动画窗口在每个显示器上各创建一个，精确覆盖各自的工作区域 (<code>workArea</code>)</li>
+            <li>窗口位置使用显示器的绝对坐标 (<code>x, y, width, height</code>)</li>
+            <li>设置窗口居中于主显示器工作区</li>
+            <li>关闭时销毁所有显示器上的窗口</li>
+        </ul>
+
+        <h2>7. 性能优化</h2>
+        <h3>7.1 GPU 加速</h3>
+<pre><code>app.commandLine.appendSwitch('enable-gpu-rasterization');
+app.commandLine.appendSwitch('enable-zero-copy');
+app.commandLine.appendSwitch('disable-software-rasterizer');</code></pre>
+
+        <h3>7.2 渲染优化</h3>
+        <ul>
+            <li><code>will-change: transform / opacity</code> — 提示浏览器创建独立合成层</li>
+            <li><code>contain: layout style</code> — 限制走路动画容器的布局和样式计算范围</li>
+            <li><code>requestAnimationFrame</code> — 使用浏览器原生帧调度</li>
+            <li><code>backgroundThrottling: false</code> — 防止后台节流影响动画</li>
+        </ul>
+
+        <h3>7.3 内存管理</h3>
+        <ul>
+            <li>动画窗口每次触发时销毁重建（解决 GNOME 工作区切换问题）</li>
+            <li>视频仅在需要时加载</li>
+            <li>窗口关闭后自动释放所有渲染资源</li>
+        </ul>
+
+        <h3>7.4 异步空闲检测</h3>
+        <ul>
+            <li>使用 <code>execFile</code>（非阻塞）替代 <code>execFileSync</code> 进行运行时检测</li>
+            <li>启动时使用 <code>execFileSync</code> 仅做一次方法探测</li>
+        </ul>
+
+        <h2>8. 视频素材要求</h2>
+        <h3>8.1 格式规范</h3>
+        <table>
+            <tr><th>属性</th><th>要求</th></tr>
+            <tr><td>容器格式</td><td>WebM</td></tr>
+            <tr><td>视频编码</td><td>VP9</td></tr>
+            <tr><td>Alpha 通道</td><td>必须（实现透明背景）</td></tr>
+            <tr><td>建议尺寸</td><td>200~500px</td></tr>
+            <tr><td>背景</td><td>透明</td></tr>
+        </table>
+
+        <h3>8.2 素材文件</h3>
+        <table>
+            <tr><th>文件</th><th>用途</th><th>播放方式</th></tr>
+            <tr><td><code>cat-walk.webm</code></td><td>猫走路进入画面</td><td>播放一次</td></tr>
+            <tr><td><code>cat-rest.webm</code></td><td>猫躺下休息</td><td>循环播放</td></tr>
+        </table>
+
+        <h3>8.3 素材查找顺序</h3>
+        <ol>
+            <li>自定义目录：用户在设置中指定的路径（仅激活用户可用）</li>
+            <li>用户目录：<code>~/.config/purr-pause/webm/</code></li>
+            <li>内置目录：<code>{app}/assets/webm/</code></li>
+        </ol>
+
+        <h2>9. 序列号与激活系统</h2>
+        <h3>9.1 机器码</h3>
+        <p>机器码由平台、架构、CPU 型号和系统唯一标识进行 SHA256 哈希，并取前 16 位十六进制字符生成。系统唯一标识在 Linux 下使用 <code>/etc/machine-id</code>，macOS 下使用 <code>IOPlatformUUID</code>，Windows 下使用 <code>MachineGuid</code>；以上均不可用时回退到 <code>hostname + homedir</code>。</p>
+
+        <h3>9.2 序列号编码</h3>
+        <p>序列号使用 Ed25519 非对称签名，内部包含 4 字节有效天数、8 字节机器码和 64 字节签名。格式化为 <code>PP-</code> 前缀，后接 Base64 编码数据，并按每 8 个字符用 <code>-</code> 分隔。</p>
+
+        <h3>9.3 激活校验</h3>
+        <ol>
+            <li>解析序列号，使用内置 Ed25519 公钥验证签名。</li>
+            <li>提取嵌入的机器码，与当前机器码比对。</li>
+            <li>检查该序列号哈希是否已在本机使用过。</li>
+            <li>匹配且未使用过则写入 <code>license.json</code> 并签名。</li>
+        </ol>
+
+        <h3>9.4 功能限制</h3>
+        <table>
+            <tr><th>功能</th><th>试用</th><th>过期</th><th>已激活</th></tr>
+            <tr><td>休息提醒</td><td>✓</td><td>✗</td><td>✓</td></tr>
+            <tr><td>时间设置</td><td>✓</td><td>✗</td><td>✓</td></tr>
+            <tr><td>动画模式切换</td><td>✗</td><td>✗</td><td>✓</td></tr>
+            <tr><td>自定义素材目录</td><td>✗</td><td>✗</td><td>✓</td></tr>
+        </table>
+        <p>限制在两层实施：前端通过 <code>_isActivated</code> 标志置灰设置项，后端在 <code>save-config</code> 处理器中校验许可证状态后才保存 <code>animationMode</code> 和 <code>customWebmDir</code>。过期状态启动时弹出激活窗口，不启动计时器；关闭激活窗口会退出应用。</p>
+
+        <h2>10. 构建系统</h2>
+        <h3>10.1 electron-builder 配置</h3>
+        <p>构建工具使用 <code>electron-builder</code>（v26+），支持多平台打包：</p>
+        <table>
+            <tr><th>平台</th><th>目标格式</th><th>命令</th></tr>
+            <tr><td>Linux</td><td>.deb / AppImage（x64 / arm64）</td><td><code>npm run build:linux:all</code></td></tr>
+            <tr><td>macOS</td><td>.dmg（Intel / Apple Silicon）</td><td><code>npm run build:mac -- --x64 --arm64</code></td></tr>
+            <tr><td>Windows</td><td>.exe NSIS（x64 / arm64）</td><td><code>npm run build:win:all</code></td></tr>
+            <tr><td>全平台</td><td>全部</td><td><code>npm run build:all</code></td></tr>
+        </table>
+        <p>打包身份使用 ASCII slug <code>purr-pause</code>，因此 Linux deb 安装到 <code>/opt/purr-pause</code>，可执行文件为 <code>/opt/purr-pause/purr-pause</code>；桌面菜单显示名通过 Linux desktop entry 覆盖为“胖猫暂停一下”。Linux deb 包通过 <code>deb.afterInstall</code> 执行 <code>scripts/postinstall.sh</code>。使用 <code>sudo dpkg -i</code> 安装时，脚本会先把 <code>/opt/purr-pause/chrome-sandbox</code> 设置为 <code>root:root</code> 和 <code>4755</code>，满足 Electron SUID sandbox 要求；随后根据 <code>SUDO_USER</code> 为真实桌面用户写入 <code>~/.config/autostart/purr-pause.desktop</code>。应用内“开机自动启动”开关也会读写同一个用户自启动文件。macOS 和 Windows 继续使用 Electron 的 <code>setLoginItemSettings()</code>。</p>
+
+        <h3>10.2 打包内容</h3>
+<pre><code>"productName": "purr-pause",
+"executableName": "purr-pause",
+"linux": {
+  "target": "deb",
+  "category": "Utility",
+  "icon": "build/icons",
+  "executableName": "purr-pause",
+  "desktop": {
+    "entry": {
+      "Name": "胖猫暂停一下",
+      "Comment": "胖猫暂停一下（PurrPause）- 一只胖猫提醒你适时休息",
+      "StartupWMClass": "purr-pause"
+    }
+  }
+},
+"files": [
+  "main.js",
+  "preload.js",
+  "lib/**/*",
+  "renderer/**/*",
+  "docs/message-api-spec.md",
+  "config.json",
+  "!tools"
+],
+"extraResources": [
+  {
+    "from": "assets",
+    "to": "assets"
+  }
+],
+"deb": {
+  "depends": [],
+  "compression": "gz",
+  "afterInstall": "scripts/postinstall.sh"
+}</code></pre>
+
+        <h3>10.3 额外资源</h3>
+        <p><code>assets</code> 目录作为 <code>extraResources</code> 打包，运行时通过 <code>process.resourcesPath</code> 访问。</p>
+
+        <h2>11. 依赖</h2>
+        <h3>11.1 运行时依赖</h3>
+        <p>无外部 npm 运行时依赖。应用仅依赖 Electron 内置模块：</p>
+        <ul>
+            <li><code>electron</code> (app, BrowserWindow, Tray, Menu, ipcMain, nativeImage, screen, dialog, shell, powerMonitor)</li>
+            <li>Node.js 内置模块：<code>path</code>, <code>fs</code>, <code>child_process</code>, <code>url</code></li>
+        </ul>
+
+        <h3>11.2 开发依赖</h3>
+        <table>
+            <tr><th>包名</th><th>版本</th><th>用途</th></tr>
+            <tr><td>electron</td><td>33.2.1</td><td>应用运行时框架</td></tr>
+            <tr><td>electron-builder</td><td>^26.0.0</td><td>打包与分发工具</td></tr>
+        </table>
+
+        <h3>11.3 系统依赖</h3>
+        <table>
+            <tr><th>工具</th><th>用途</th><th>必要性</th></tr>
+            <tr><td>xprintidle</td><td>X11 空闲时间检测</td><td>推荐（优先使用）</td></tr>
+            <tr><td>gdbus</td><td>GNOME 空闲时间检测</td><td>备选方案</td></tr>
+        </table>
+
+        <h2>12. 开发模式</h2>
+        <p>启动开发模式：</p>
+<pre><code>npm run dev
+# 或
+electron . --dev</code></pre>
+        <p>开发模式下 <code>thresholdMinutes</code> 设为 0.15 分钟（9 秒），方便快速测试动画效果。</p>
+
+    </div>
+</body>
+</html>
