@@ -225,7 +225,7 @@ pub fn present<F, T, L>(
         let clear = clear_btn.clone();
         path_entry.connect_changed(move |e| {
             let text = e.text().to_string();
-            *h.borrow_mut() = PathBuf::from(&text);
+            *h.borrow_mut() = crate::ui::dir_picker::expand_tilde(&text);
             clear.set_sensitive(!text.trim().is_empty());
             if text.trim().is_empty() {
                 sub.set_subtitle("使用默认目录");
@@ -241,29 +241,18 @@ pub fn present<F, T, L>(
     {
         let win = window.clone();
         let entry = path_entry.clone();
+        let holder = dir_holder.clone();
         pick_btn.connect_clicked(move |_| {
-            // ⚠️ 不能用 gtk::FileDialog —— 它是 GTK 4.10 才新增的，
-            // 而本应用最低要支持 GTK 4.6（Ubuntu 22.04），那里只有
-            // FileChooserNative（4.0 起即有，API 语义等价）。
-            let dlg = gtk::FileChooserNative::new(
-                Some("选择素材目录"),
-                Some(&win),
-                gtk::FileChooserAction::SelectFolder,
-                Some("选择"),
-                Some("取消"),
-            );
+            // ⚠️ 不用 GtkFileChooserNative / FileChooserDialog：
+            //    在缺 xdg-desktop-portal / gvfs 的桌面上它会报
+            //    「无法显示文件夹内容」，完全列不出目录（用户实测）。
+            //    改用自实现的目录选择器，纯 std::fs，任何环境都能用。
+            let start = holder.borrow().clone();
             let e = entry.clone();
-            // NativeDialog 的响应是信号式（gtk4-rs 里没有同步的 run()）。
-            dlg.connect_response(move |dlg, resp| {
-                if resp == gtk::ResponseType::Accept {
-                    if let Some(path) = dlg.file().and_then(|f| f.path()) {
-                        // 写进输入框即可，holder / 副标题由 connect_changed 联动
-                        e.set_text(&path.to_string_lossy());
-                    }
-                }
-                dlg.hide();
+            crate::ui::dir_picker::pick(&win, Some(start), move |picked| {
+                // 写进输入框即可，holder / 副标题由 connect_changed 联动
+                e.set_text(&picked.to_string_lossy());
             });
-            dlg.show();
         });
     }
 

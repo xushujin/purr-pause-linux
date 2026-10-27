@@ -144,6 +144,12 @@ impl CatOverlay {
             .deletable(true)
             .build();
         window.add_css_class("cat-overlay");
+        // ⚠️ GTK 会自发给 toplevel 加一个 `.background` 样式类，Adwaita 主题的
+        //    `window.background { background-color: @window_bg_color }` 就靠它上色。
+        //    只写 `window.cat-overlay { background: transparent }` 在部分主题下
+        //    会被压掉 —— 表现就是「猫抠出来了，但周围一圈黑底」。
+        //    直接摘掉这个类，主题规则就不再匹配本窗口。
+        window.remove_css_class("background");
 
         // ── 画面层：静态猫图在下，GL 视频层在上 ──────────────────────
         let frame = gtk::Fixed::new();
@@ -393,6 +399,7 @@ fn begin(
     let inited = Rc::new(Cell::new(false));
     let bar_shown = Rc::new(Cell::new(false));
     let countdown_start: Rc<Cell<Option<Instant>>> = Rc::new(Cell::new(None));
+    let dumped = Rc::new(Cell::new(false));
     let t0 = Instant::now();
     let total_secs = break_minutes.max(1) as u64 * 60;
 
@@ -479,6 +486,14 @@ fn begin(
                 if let Some(a) = player.aspect() {
                     *ctx.aspect.borrow_mut() = a;
                 }
+            }
+        }
+
+        // 首帧到达后打一行诊断（用来区分「抠像没生效」和「mpv 把透明混成黑底」）
+        if ctx.frames.get() > 0 && !dumped.get() {
+            dumped.set(true);
+            if let Some(p) = ctx.player.borrow().as_ref() {
+                p.debug_dump();
             }
         }
 
@@ -705,8 +720,14 @@ fn install_css() {
     let css = gtk::CssProvider::new();
     css.load_from_data(
         r#"
-        window.cat-overlay {
+        /* 窗口本体：三重保险 —— 颜色、背景图、阴影全部清掉。
+           漏掉任何一条都可能露出一块不透明底色（实测是黑底）。 */
+        window.cat-overlay,
+        window.cat-overlay.background {
             background-color: transparent;
+            background-image: none;
+            box-shadow: none;
+            border: none;
         }
         .cat-bar {
             background-color: rgba(0, 0, 0, 0.66);

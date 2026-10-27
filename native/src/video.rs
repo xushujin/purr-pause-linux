@@ -116,6 +116,8 @@ type MpvGetProperty =
 type MpvCommand = unsafe extern "C" fn(*mut c_void, *const *const c_char) -> c_int;
 type MpvWaitEvent = unsafe extern "C" fn(*mut c_void, f64) -> *const MpvEvent;
 type MpvErrorString = unsafe extern "C" fn(c_int) -> *const c_char;
+type MpvGetPropertyString = unsafe extern "C" fn(*mut c_void, *const c_char) -> *mut c_char;
+type MpvFree = unsafe extern "C" fn(*mut c_void);
 
 type MpvRenderContextCreate =
     unsafe extern "C" fn(*mut *mut c_void, *mut c_void, *mut MpvRenderParam) -> c_int;
@@ -145,6 +147,8 @@ struct MpvApi {
     command: MpvCommand,
     wait_event: MpvWaitEvent,
     error_string: MpvErrorString,
+    get_property_string: MpvGetPropertyString,
+    free: MpvFree,
     render_context_create: MpvRenderContextCreate,
     render_context_render: MpvRenderContextRender,
     render_context_free: MpvRenderContextFree,
@@ -193,6 +197,8 @@ fn load_mpv_api() -> Result<&'static MpvApi, String> {
                 command: unsafe { need(&lib, b"mpv_command\0")? },
                 wait_event: unsafe { need(&lib, b"mpv_wait_event\0")? },
                 error_string: unsafe { need(&lib, b"mpv_error_string\0")? },
+                get_property_string: unsafe { need(&lib, b"mpv_get_property_string\0")? },
+                free: unsafe { need(&lib, b"mpv_free\0")? },
                 render_context_create: unsafe { need(&lib, b"mpv_render_context_create\0")? },
                 render_context_render: unsafe { need(&lib, b"mpv_render_context_render\0")? },
                 render_context_free: unsafe { need(&lib, b"mpv_render_context_free\0")? },
@@ -526,6 +532,15 @@ impl VideoPlayer {
             return Err(format!("mpv 初始化失败：{}", mpv_err(api, rc)));
         }
 
+        // 保险：有些 mpv 版本会在 initialize 时重置 VO 选项，
+        // 这里用属性接口再确认一次 alpha。失败不致命（选项通常已生效）。
+        {
+            let (Ok(k), Ok(v)) = (CString::new("alpha"), CString::new("yes")) else {
+                unreachable!()
+            };
+            unsafe { (api.set_property_string)(handle, k.as_ptr(), v.as_ptr()) };
+        }
+
         let mut init = MpvOpenglInitParams {
             get_proc_address: Some(get_proc_address),
             get_proc_address_ctx: gl_ctx,
@@ -618,6 +633,34 @@ impl VideoPlayer {
                 mpv_err(self.api, rc)
             );
         }
+    }
+
+    /// 读取字符串型属性（失败返回 None）。
+    fn get_str(&self, name: &str) -> Option<String> {
+        let cn = CString::new(name).ok()?;
+        let p = unsafe { (self.api.get_property_string)(self.handle, cn.as_ptr()) };
+        if p.is_null() {
+            return None;
+        }
+        let s = unsafe { CStr::from_ptr(p) }.to_string_lossy().to_string();
+        unsafe { (self.api.free)(p as *mut c_void) };
+        Some(s)
+    }
+
+    /// 排查用：把与「透明/抠像」相关的关键参数打一行出来。
+    ///
+    /// 这一行能直接区分两类失败：
+    ///   · `源alpha=no`      → 解码后没有 alpha（抠像滤镜没生效）
+    ///   · `alpha选项` 不是 yes → mpv 会把透明像素混合成黑底
+    pub fn debug_dump(&self) {
+        let fmt = self.get_str("video-params/pixelformat").unwrap_or_default();
+        let src_alpha = self.get_str("video-params/alpha").unwrap_or_default();
+        let alpha_opt = self.get_str("alpha").unwrap_or_default();
+        let hwdec = self.get_str("hwdec-current").unwrap_or_default();
+        let fbo = current_fbo();
+        eprintln!(
+            "[purr-pause-linux] 视频参数: pixelformat={fmt} 源alpha={src_alpha} alpha选项={alpha_opt} hwdec={hwdec} fbo={fbo}"
+        );
     }
 
     /// 读取 int64 型属性。
