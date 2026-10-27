@@ -31,8 +31,15 @@ use core::config::{self, Config};
 use core::idle;
 use core::logger::Logger;
 use license::LicenseStatus;
+use std::sync::atomic::{AtomicBool, Ordering};
 use ui::overlay::{CatOverlay, OverlayEvent};
 use ui::tray::{Tray, TrayItem};
+
+/// `--test` 模式：覆盖层关掉后直接退出进程。
+///
+/// 否则用户在终端里敲 `purr-pause-linux --test`，命令永远不返回 ——
+/// 一个「测试」命令变成常驻守护进程，很反直觉。
+static TEST_MODE: AtomicBool = AtomicBool::new(false);
 
 const APP_ID: &str = "com.purr-pause-linux.app";
 const MONITOR_INTERVAL_MS: u64 = 10_000;
@@ -40,6 +47,57 @@ const MONITOR_INTERVAL_MS: u64 = 10_000;
 const IDLE_RESET_MS: u64 = 10 * 60 * 1000;
 /// idle 小于该值视为活跃（3 分钟）。
 const IDLE_ACTIVE_MS: u64 = 180 * 1000;
+
+/// 启动模式（由命令行参数决定）。
+///
+/// 这些入口很重要：托盘不可用的环境（GNOME 未装 AppIndicators 扩展、
+/// 或覆盖层意外挡住了托盘）下，用户仍然需要能打开设置、能测试屏保。
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RunMode {
+    /// 正常守护进程
+    Normal,
+    /// `--test`：启动后立即弹一次猫咪覆盖层
+    Test,
+    /// `--settings`：启动后直接打开设置窗口
+    Settings,
+    /// `--selftest`：打印环境自检后退出
+    SelfTest,
+    /// `--version` / `--help`
+    Version,
+    Help,
+}
+
+fn parse_mode(args: &[String]) -> RunMode {
+    let mut mode = RunMode::Normal;
+    for a in args {
+        match a.as_str() {
+            "--test" | "test" => mode = RunMode::Test,
+            "--settings" | "settings" => mode = RunMode::Settings,
+            "--selftest" | "selftest" | "--diagnose" => mode = RunMode::SelfTest,
+            "--version" | "-V" => mode = RunMode::Version,
+            "--help" | "-h" => mode = RunMode::Help,
+            _ => {}
+        }
+    }
+    mode
+}
+
+const HELP_TEXT: &str = "\
+胖猫暂停一下（PurrPause Linux）
+
+用法：
+  purr-pause-linux              后台常驻（托盘菜单是主要入口）
+  purr-pause-linux --test       启动后立刻弹出一次休息提醒（验证屏保）
+  purr-pause-linux --settings   启动后直接打开设置窗口
+  purr-pause-linux --selftest   打印环境自检（排查「点了没反应」）
+  purr-pause-linux --version    显示版本
+  purr-pause-linux --help       显示本帮助
+
+提示：
+  · 托盘不可用时（GNOME 需 gnome-shell-extension-appindicator），
+    用 --settings 打开设置、用 --test 验证屏保。
+  · 覆盖层可以用 Esc / 双击画面 / 窗口关闭按钮退出。
+";
 
 /// 应用共享状态。
 pub struct AppState {
@@ -69,6 +127,27 @@ fn main() {
         std::process::id()
     ));
 
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let mode = parse_mode(&args);
+    if mode == RunMode::Test {
+        TEST_MODE.store(true, Ordering::Relaxed);
+    }
+
+    // 自检 / 版本 / 帮助：不需要 GUI，直接打印后退出。
+    // 放在创建 Application 之前 —— 自检要能在没有显示环境的终端里跑。
+    match mode {
+        RunMode::SelfTest => std::process::exit(core::selftest::run()),
+        RunMode::Version => {
+            println!("purr-pause-linux {}", env!("CARGO_PKG_VERSION"));
+            return;
+        }
+        RunMode::Help => {
+            print!("{HELP_TEXT}");
+            return;
+        }
+        _ => {}
+    }
+
     let app = adw::Application::builder()
         .application_id(APP_ID)
         // 不设 NON_UNIQUE：GApplication 默认借助 D-Bus well-known name 保证单实例。
@@ -84,8 +163,11 @@ fn main() {
     // GApplication 在**每次**被激活时都会发 activate —— 包括第二个实例通过
     // D-Bus 转发过来的激活。原先整段初始化写在 activate 里，导致用户再点一次
     // 图标就会把一切重来一遍：重复的计时器、重复的消息轮询、重复的托盘。
-    app.connect_startup(move |_app| {
+    app.connect_startup(move |app_ref| {
         dbg_trace("startup：开始初始化");
+        // 保存 Application 句柄：设置窗口要 set_application() 才能被应用管理
+        // （未关联的裸窗口不进入应用的窗口列表，再次点图标也不会被前置）。
+        APP.with(|a| *a.borrow_mut() = Some(app_ref.clone()));
         let data_dir = config::data_dir();
         let _ = std::fs::create_dir_all(&data_dir);
         let log_dir = data_dir.join("logs");
@@ -141,7 +223,7 @@ fn main() {
             &format!("许可证状态: {:?}", status.status),
         );
 
-        if status.status == LicenseStatus::Expired {
+        if status.status == LicenseStatus::Expired && mode != RunMode::Test {
             show_activation(&state);
         }
 
@@ -152,6 +234,21 @@ fn main() {
         // 供 activate 回调取用（见下方 connect_activate）
         STATE.with(|s| *s.borrow_mut() = Some(state.clone()));
 
+        // 命令行入口：--test / --settings 在初始化完成后立刻执行一次。
+        // 延迟 600ms 是为了等窗口系统准备好（首次映射前 present 会被忽略）。
+        if matches!(mode, RunMode::Test | RunMode::Settings) {
+            let st = state.clone();
+            glib::timeout_add_local_once(Duration::from_millis(600), move || {
+                if mode == RunMode::Test {
+                    dbg_trace("--test：立即触发覆盖层");
+                    trigger_cat(&st, true);
+                } else {
+                    dbg_trace("--settings：打开设置窗口");
+                    open_settings(&st);
+                }
+            });
+        }
+
         // 应用常驻：GApplication 在 use_count 归零（无窗口、无 hold）时退出。
         // ⚠️ 两个要点：
         //   1. hold() 必须在注册之后调用 —— startup 信号正是在 register 之后、
@@ -160,7 +257,7 @@ fn main() {
         //   2. guard 有意 forget：守护进程存活期间永不释放（退出走
         //      设置窗口的「退出应用」按钮 / 未来的托盘菜单）。
         //      若正常绑定到变量，main 返回时 guard 析构 = hold 白做。
-        std::mem::forget(_app.hold());
+        std::mem::forget(app_ref.hold());
 
         let tray_state = if TRAY.with(|t| t.borrow().is_some()) {
             "托盘已创建"
@@ -181,6 +278,12 @@ fn main() {
     //    「托盘可用 → 静默进驻；不可用 → 弹窗」。
     app.connect_activate(move |_app| {
         dbg_trace("activate：收到激活请求（打开窗口）");
+        // --test 模式下不弹设置窗口：否则全屏覆盖层会盖住它，
+        // 用户测完还得再找一次设置窗口，体验很糟。
+        if mode == RunMode::Test {
+            dbg_trace("activate：--test 模式，跳过自动开窗");
+            return;
+        }
         let Some(state) = STATE.with(|s| s.borrow().clone()) else {
             dbg_trace("activate：⚠️ STATE 未初始化（startup 未跑过？），忽略");
             return;
@@ -249,6 +352,18 @@ fn start_monitoring(state: &Rc<RefCell<AppState>>) {
                 }
             }
             state.borrow_mut().is_screen_locked = locked;
+        }
+
+        // 覆盖层状态自愈：窗口被窗口管理器或异常路径关掉后，
+        // is_overlay_showing 会残留为 true，导致计时和「立即测试」永久失效。
+        {
+            let mut s = state.borrow_mut();
+            if s.is_overlay_showing && s.overlays.is_empty() {
+                s.is_overlay_showing = false;
+                s.active_seconds = 0;
+                s.snooze_threshold = 0;
+                s.log.warn("覆盖层已消失，状态自动复位");
+            }
         }
 
         let should_skip = {
@@ -327,6 +442,21 @@ fn trigger_cat(state: &Rc<RefCell<AppState>>, manual: bool) {
     // 多屏全屏的正确做法是给每个显示器各建一个窗口并调`fullscreen_on_monitor`。
     // 这比手动算坐标更可靠：Wayland 下compositor 不允许客户端自行定位窗口。
     let monitors = list_monitors();
+    if monitors.is_empty() {
+        // 枚举不到显示器（部分 Wayland 合成器 / 远程会话）时不能什么都不做 ——
+        // 那样用户点「立即测试」就是毫无反应。退化为单个全屏窗口。
+        eprintln!("[purr-pause-linux] 未能枚举显示器，退化为单个全屏覆盖层");
+        let overlay = CatOverlay::new(
+            cfg.animation_mode.clone(),
+            break_minutes,
+            snooze_count,
+            walk.clone(),
+            idle_v.clone(),
+        );
+        overlay.window.fullscreen();
+        overlay.window.present();
+        state.borrow_mut().overlays.push(overlay);
+    }
     for monitor in monitors {
         let overlay = CatOverlay::new(
             cfg.animation_mode.clone(),
@@ -337,12 +467,34 @@ fn trigger_cat(state: &Rc<RefCell<AppState>>, manual: bool) {
         );
         let geo = monitor.geometry();
         overlay.window.set_default_size(geo.width(), geo.height());
-        overlay.window.fullscreen_on_monitor(&monitor);
+        // 先 present 再指定显示器：对未映射的窗口调用 fullscreen_on_monitor
+        // 在部分 GTK 版本上只是记下请求，映射后才生效，顺序反过来更稳妥。
         overlay.window.present();
+        overlay.window.fullscreen_on_monitor(&monitor);
         state.borrow_mut().overlays.push(overlay);
     }
 
     log_line(state, "触发猫咪覆盖层");
+
+    // ── 看门狗 ─────────────────────────────────────────────────────
+    // 覆盖层是全屏窗口，一旦「显示了但没映射成功」或「建完就被销毁」，
+    // 状态位 is_overlay_showing 会永久为 true，从此计时和「立即测试」全部失效。
+    // 6 秒后检查：一个窗口都没映射上就自动收摊，保证应用不会卡死。
+    {
+        let st = state.clone();
+        glib::timeout_add_local_once(Duration::from_secs(6), move || {
+            let stuck = {
+                let s = st.borrow();
+                s.is_overlay_showing && !s.overlays.iter().any(|ov| ov.window.is_mapped())
+            };
+            if stuck {
+                eprintln!(
+                    "[purr-pause-linux] 覆盖层 6 秒内未能显示，已自动关闭（避免卡住桌面与托盘）"
+                );
+                dismiss_cat(&st);
+            }
+        });
+    }
 
     // 轮询覆盖层事件
     let state_poll = state.clone();
@@ -392,6 +544,12 @@ fn dismiss_cat(state: &Rc<RefCell<AppState>>) {
     drop(s);
     log_line(state, "用户关闭提醒, 计时归零");
     refresh_tray(state);
+
+    // `--test` 是一次性验证：关掉覆盖层就退出，别让命令一直挂着。
+    if TEST_MODE.load(Ordering::Relaxed) {
+        dbg_trace("--test 结束，退出");
+        std::process::exit(0);
+    }
 }
 
 fn snooze_cat(state: &Rc<RefCell<AppState>>) {
@@ -657,6 +815,9 @@ thread_local! {
     /// 已初始化的应用状态，startup 时写入。
     /// 供 connect_activate 使用（「再次启动 → 打开设置」这条入口）。
     static STATE: RefCell<Option<Rc<RefCell<AppState>>>> = const { RefCell::new(None) };
+    /// GtkApplication 句柄，startup 时写入。
+    /// 设置窗口要 `set_application()` 才能被应用管理（窗口列表 / 前置 / 分组）。
+    static APP: RefCell<Option<adw::Application>> = const { RefCell::new(None) };
 }
 
 fn build_tray_items(state: &Rc<RefCell<AppState>>) -> Vec<TrayItem> {
@@ -900,25 +1061,47 @@ fn open_settings(state: &Rc<RefCell<AppState>>) {
     let cfg = state.borrow().config.clone();
     let idle_method = idle::detection_method().to_string();
     let activated = license::check_status().status == LicenseStatus::Active;
+
+    // 设置窗口需要关联到 GtkApplication（否则不进入应用窗口列表）。
+    let Some(app) = APP.with(|a| a.borrow().clone()) else {
+        eprintln!("[purr-pause-linux] Application 尚未初始化，无法打开设置窗口");
+        return;
+    };
+
     let st = state.clone();
-    ui::settings::present(cfg, activated, idle_method, move |new_cfg| {
-        let mut s = st.borrow_mut();
-        let log_enabled = new_cfg.log_enabled;
-        s.config = new_cfg.clone();
-        s.log.set_enabled(log_enabled);
-        if let Err(e) = config::save(&new_cfg) {
-            let msg = format!("配置写入 {} 失败：{e}", config::user_config_path().display());
-            eprintln!("[purr-pause-linux] {msg}");
-            s.log.error(&msg);
-        } else {
-            s.log.info(&format!(
-                "配置已保存至 {}",
-                config::user_config_path().display()
-            ));
-        }
-        drop(s);
-        refresh_tray(&st);
-    });
+    let st_test = state.clone();
+    let st_log = state.clone();
+    ui::settings::present(
+        &app,
+        cfg,
+        activated,
+        idle_method,
+        move |new_cfg| {
+            let mut s = st.borrow_mut();
+            let log_enabled = new_cfg.log_enabled;
+            s.config = new_cfg.clone();
+            s.log.set_enabled(log_enabled);
+            if let Err(e) = config::save(&new_cfg) {
+                let msg = format!("配置写入 {} 失败：{e}", config::user_config_path().display());
+                eprintln!("[purr-pause-linux] {msg}");
+                s.log.error(&msg);
+            } else {
+                s.log.info(&format!(
+                    "配置已保存至 {}",
+                    config::user_config_path().display()
+                ));
+            }
+            drop(s);
+            refresh_tray(&st);
+        },
+        move || {
+            // 设置窗口里的「立即测试」：不依赖托盘，任何环境都能验证屏保
+            trigger_cat(&st_test, true);
+        },
+        move || {
+            open_log_dir(&st_log);
+        },
+    );
 }
 
 fn show_activation(state: &Rc<RefCell<AppState>>) {

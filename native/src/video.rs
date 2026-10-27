@@ -133,6 +133,9 @@ type MpvRenderContextSetUpdateCallback = unsafe extern "C" fn(
 /// `_lib` 必须活到进程结束 —— 下面所有函数指针都指向它。
 struct MpvApi {
     _lib: libloading::Library,
+    /// 实际 dlopen 成功的库名（`libmpv.so.2` / `libmpv.so.1` / `libmpv.so`），
+    /// 自检（`--selftest`）与日志里要报出来，便于判断系统装的是哪一代。
+    lib_name: &'static str,
     create: MpvCreate,
     initialize: MpvInitialize,
     terminate_destroy: MpvTerminateDestroy,
@@ -180,6 +183,7 @@ fn load_mpv_api() -> Result<&'static MpvApi, String> {
         // 先全部解析到局部变量，再整体构造 —— 否则 `lib` 已被借用又被移动
         let resolved: Result<MpvApi, String> = (|| {
             Ok(MpvApi {
+                lib_name: name,
                 create: unsafe { need(&lib, b"mpv_create\0")? },
                 initialize: unsafe { need(&lib, b"mpv_initialize\0")? },
                 terminate_destroy: unsafe { need(&lib, b"mpv_terminate_destroy\0")? },
@@ -212,6 +216,29 @@ fn load_mpv_api() -> Result<&'static MpvApi, String> {
 
 fn mpv_api() -> Result<&'static MpvApi, String> {
     MPV_API.get_or_init(load_mpv_api).clone()
+}
+
+/// 自检用：只做「能不能 dlopen 并解析全部符号」的探测，不创建播放器。
+///
+/// 返回实际加载到的库名；失败时返回可读原因。
+pub fn probe() -> Result<String, String> {
+    mpv_api().map(|api| api.lib_name.to_string())
+}
+
+/// 自检用：GL 相关动态库是否可加载（mpv 的 get_proc_address 依赖它们）。
+pub fn probe_gl_libs() -> Result<String, String> {
+    let libs = gl_libs()?;
+    let mut names: Vec<&str> = Vec::new();
+    if libs.gl.is_some() {
+        names.push("libGL.so.1");
+    }
+    if libs.egl.is_some() {
+        names.push("libEGL.so.1");
+    }
+    if libs.gles.is_some() {
+        names.push("libGLESv2.so.2");
+    }
+    Ok(names.join(", "))
 }
 
 /// 把 mpv 返回码翻译成可读信息（失败时退回错误码数字）。
