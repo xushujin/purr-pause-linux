@@ -111,6 +111,8 @@ pub struct AppState {
     is_paused: bool,
     /// 暂停时长（分钟）；0 = 直到手动恢复；未暂停时为 -1
     paused_minutes: i64,
+    /// 本次暂停的起始时刻，用于在菜单里显示剩余时间
+    pause_start: Option<Instant>,
     is_overlay_showing: bool,
     last_dismiss: Option<Instant>,
     overlays: Vec<CatOverlay>,
@@ -229,6 +231,7 @@ fn main() {
             snooze_threshold: 0,
             is_paused: false,
             paused_minutes: -1,
+            pause_start: None,
             is_overlay_showing: false,
             last_dismiss: None,
             overlays: Vec::new(),
@@ -651,7 +654,16 @@ fn build_tray_items(state: &Rc<RefCell<AppState>>) -> Vec<TrayItem> {
     let s = state.borrow();
 
     let remaining = if s.is_paused {
-        "监控已暂停".to_string()
+        // 暂停时把剩余时间也显示出来 —— 这是用户唯一能确认「暂停生效了」的地方
+        match (s.paused_minutes, s.pause_start) {
+            (0, _) => "监控已暂停（手动恢复）".to_string(),
+            (m, Some(t)) => {
+                let used = t.elapsed().as_secs() as i64;
+                let left = (m * 60 - used).max(0) / 60 + 1;
+                format!("监控已暂停（剩 {left} 分钟）")
+            }
+            _ => "监控已暂停".to_string(),
+        }
     } else {
         let threshold = if s.snooze_threshold > 0 {
             s.snooze_threshold
@@ -855,7 +867,9 @@ fn pause_for(state: &Rc<RefCell<AppState>>, minutes: i64) {
         let mut s = state.borrow_mut();
         s.is_paused = true;
         s.paused_minutes = minutes;
+        s.pause_start = Some(Instant::now());
     }
+    eprintln!("[purr-pause-linux] 已暂停监控 {minutes} 分钟（0 = 直到手动恢复）");
     log_line(state, &format!("暂停监控 {minutes} 分钟"));
     if minutes > 0 {
         notify(&format!("已暂停监控 {minutes} 分钟"));
@@ -876,7 +890,9 @@ fn resume_monitoring(state: &Rc<RefCell<AppState>>) {
         let mut s = state.borrow_mut();
         s.is_paused = false;
         s.paused_minutes = -1;
+        s.pause_start = None;
     }
+    eprintln!("[purr-pause-linux] 已恢复监控");
     log_line(state, "恢复监控");
     notify("已恢复监控");
     refresh_tray(state);
