@@ -23,30 +23,6 @@ pub struct Config {
     pub animation_mode: String,
     #[serde(rename = "logEnabled")]
     pub log_enabled: bool,
-    #[serde(rename = "messageNotifyEnabled")]
-    pub message_notify_enabled: bool,
-    #[serde(rename = "messageSources")]
-    pub message_sources: Vec<MessageSource>,
-    #[serde(rename = "messagePollInterval")]
-    pub message_poll_interval: i64,
-    #[serde(rename = "messageMaxCacheItems")]
-    pub message_max_cache_items: i64,
-    #[serde(rename = "messageNotifyDir")]
-    pub message_notify_dir: String,
-    #[serde(rename = "messageNotifyVideo")]
-    pub message_notify_video: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MessageSource {
-    pub id: String,
-    pub name: String,
-    #[serde(rename = "listUrl")]
-    pub list_url: String,
-    #[serde(rename = "authHeaders", default)]
-    pub auth_headers: String,
-    #[serde(default)]
-    pub enabled: bool,
 }
 
 impl Default for Config {
@@ -59,12 +35,6 @@ impl Default for Config {
             idle_video: "cat-rest.webm".to_string(),
             animation_mode: "walk-center".to_string(),
             log_enabled: false,
-            message_notify_enabled: false,
-            message_sources: Vec::new(),
-            message_poll_interval: 60,
-            message_max_cache_items: 30,
-            message_notify_dir: String::new(),
-            message_notify_video: "notify-rocket.webm".to_string(),
         }
     }
 }
@@ -108,27 +78,6 @@ pub fn video_paths(config: &Config, builtin_dir: &Path) -> (PathBuf, PathBuf) {
     )
 }
 
-/// 小火箭素材查找：消息目录 → 通用目录 → 用户 webm → 内置。
-pub fn resolve_rocket(filename: &str, config: &Config, builtin_dir: &Path) -> Option<PathBuf> {
-    let user_dir = data_dir().join("webm");
-    let mut dirs: Vec<PathBuf> = Vec::new();
-    if !config.message_notify_dir.is_empty() {
-        dirs.push(PathBuf::from(&config.message_notify_dir));
-    }
-    if !config.custom_webm_dir.is_empty() {
-        dirs.push(PathBuf::from(&config.custom_webm_dir));
-    }
-    dirs.push(user_dir);
-    dirs.push(builtin_dir.to_path_buf());
-    for d in dirs {
-        let p = d.join(filename);
-        if p.exists() {
-            return Some(p);
-        }
-    }
-    None
-}
-
 pub fn load(builtin_config: &Path) -> Config {
     let user = user_config_path();
     let path = if user.exists() { user } else { builtin_config.to_path_buf() };
@@ -136,8 +85,6 @@ pub fn load(builtin_config: &Path) -> Config {
         Ok(raw) => serde_json::from_str::<Config>(&raw).unwrap_or_default(),
         Err(_) => Config::default(),
     };
-    cfg.message_max_cache_items = clamp(cfg.message_max_cache_items, 1, 30, 30);
-    cfg.message_poll_interval = clamp(cfg.message_poll_interval, 10, 3600, 60);
     cfg.threshold_minutes = clamp(cfg.threshold_minutes, 1, 480, 45);
     cfg.break_minutes = clamp(cfg.break_minutes, 1, 60, 5);
     cfg

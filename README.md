@@ -20,7 +20,6 @@
 - **安装即全功能**：无授权码、无试用期限制
 - 系统托盘常驻，不占用任务栏
 - 单实例运行，重复启动会立即退出
-- 消息提醒（待办通知，可选模块，默认关闭）：轮询第三方待办接口，有新待办时提醒并在托盘显示角标
 
 ## 安装
 
@@ -70,7 +69,7 @@ cd native
 ## 使用
 
 1. 安装后自动在系统托盘显示肥猫图标
-2. 右键托盘图标可以：待办消息、暂停监控、设置、查看日志、立即测试、退出
+2. 右键托盘图标可以：暂停 30 分钟 / 1 小时 / 2 小时 / 到手动恢复、设置、查看日志、立即测试、退出
 3. 托盘菜单显示距下次休息的剩余时间和软件版本号
 4. 屏幕使用时间到达阈值后，猫咪自动出现在所有显示器上
 5. 可点击"再等 5 分钟"延后休息（最多 2 次）
@@ -101,7 +100,7 @@ GNOME 默认不显示第三方托盘图标（需要 `gnome-shell-extension-appin
 | 动画模式 | 猫咪出现的方式 | 中央走出 / 右下角走出 / 中央淡入 / 右侧走出 |
 | 素材目录 | 自定义视频素材路径（可直接输入或浏览选择） | — |
 | 开机自动启动 | 写入 `~/.config/autostart/purr-pause-linux.desktop` | 开/关 |
-| 写入日志 | 记录计时与消息提醒过程，输出到 `~/.local/share/purr-pause-linux/logs/` | 开/关 |
+| 写入日志 | 记录计时过程，输出到 `~/.local/share/purr-pause-linux/logs/` | 开/关 |
 
 点「保存」后窗口不会关闭，顶部会弹出「设置已保存」提示条 ——
 看到提示就说明配置已经写进 `~/.local/share/purr-pause-linux/config.json`。
@@ -132,21 +131,6 @@ purr-pause-linux --selftest
 
 要求：WebM 格式，VP9 编码，带 Alpha 通道（透明背景）。
 制作参考见 `native/data/README-assets.txt`。
-
-## 消息提醒（待办通知）
-
-可选模块，**默认关闭**。开启后胖猫会轮询你配置的第三方待办接口
-（工单 / 审批 / 告警 / 任务等），有新待办时提醒你，并在托盘显示待办角标。
-应用只做轮询、提醒、展示与跳转，不保存业务数据。
-
-第三方接口对接规范见 [docs/message-api-spec.md](docs/message-api-spec.md)。
-
-要点：
-- 每个源配置完整 URL 与请求头，轮询 `GET <url>?limit=<N>&offset=0`
-- 首次同步只建立基线、不弹提醒；之后按 `id` 差集检测新增
-- 连续失败 5 次后自动降频退避（最高 300 秒）
-- 点击某条待办用默认浏览器打开，并在本地清理（不回写第三方）
-- 仅允许打开 `http(s)` 链接；请求头不写日志
 
 ## 授权
 
@@ -209,17 +193,14 @@ purr-pause-linux/
 │   │   ├── webm/            # cat-walk.webm / cat-rest.webm
 │   │   └── icons/
 │   └── src/
-│       ├── main.rs          # 入口：托盘、计时、覆盖层、消息轮询
+│       ├── main.rs          # 入口：托盘、计时、覆盖层
 │       ├── core/            # 配置 / 空闲检测 / 日志 / 开机自启
-│       ├── message/         # 待办轮询与差集检测
-│       ├── ui/              # 覆盖层 / 设置 / 待办列表 / 托盘
+│       ├── ui/              # 覆盖层 / 设置 / 托盘
 │       └── video.rs         # libmpv 解码 + 渲染到 GtkGLArea（运行时 dlopen libmpv）
 ├── tools/
 │   ├── keygen.js            # Electron 版序列号生成器（native 版已不需要）
 │   ├── sig-fixtures/        # Electron 版跨语言签名等价性回归测试
 │   └── uninstall-linux.sh   # 卸载脚本
-├── docs/
-│   └── message-api-spec.md  # 第三方待办接口对接规范
 └── .github/workflows/
     └── build-native.yml     # CI：24.04 构建 deb、22.04 容器内验证安装、打 tag 发 Release
 ```
@@ -230,7 +211,6 @@ purr-pause-linux/
 - Rust —— 业务逻辑
 - libmpv —— webm（VP9 + Alpha）解码，经 render API 渲染进 GtkGLArea；
   运行时 dlopen（`libmpv.so.2` → `libmpv.so.1`），不绑定具体版本
-- reqwest —— 第三方待办接口轮询
 - 自实现 D-Bus StatusNotifierItem —— 系统托盘（GTK4 下无法再用 libappindicator）
 
 **无原生扩展依赖**，除系统 GTK4 与 libmpv 外全部为纯 Rust 实现。

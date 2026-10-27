@@ -15,7 +15,6 @@
 //!   - VP9+Alpha 素材必须软解（hwdec=no），硬解会丢 alpha 导致绿底
 
 mod core;
-mod message;
 mod ui;
 mod video;
 
@@ -114,9 +113,6 @@ pub struct AppState {
     last_dismiss: Option<Instant>,
     overlays: Vec<CatOverlay>,
     pub log: Logger,
-    pub badge_count: i64,
-    /// 消息提醒：每源运行时状态
-    pub sources: Vec<message::SourceRuntime>,
     /// 屏幕是否处于锁屏状态
     is_screen_locked: bool,
 }
@@ -224,9 +220,6 @@ fn main() {
         // 首次运行写入素材说明
         write_asset_readme(&data_dir.join("webm"));
 
-        // build_sources 借用 cfg，必须在把 cfg 移入 AppState 之前算好（E0382）
-        let sources = build_sources(&cfg);
-
         let state = Rc::new(RefCell::new(AppState {
             config: cfg,
             active_seconds: 0,
@@ -237,8 +230,6 @@ fn main() {
             last_dismiss: None,
             overlays: Vec::new(),
             log,
-            badge_count: 0,
-            sources,
             is_screen_locked: false,
         }));
 
@@ -247,7 +238,6 @@ fn main() {
 
         build_tray(&state);
         start_monitoring(&state);
-        start_message_poll(&state);
 
         // 供 activate 回调取用（见下方 connect_activate）
         STATE.with(|s| *s.borrow_mut() = Some(state.clone()));
@@ -459,24 +449,28 @@ fn trigger_cat(state: &Rc<RefCell<AppState>>, manual: bool) {
         // 枚举不到显示器（部分 Wayland 合成器 / 远程会话）时不能什么都不做 ——
         // 那样用户点「立即测试」就是毫无反应。退化为单个全屏窗口。
         eprintln!("[purr-pause-linux] 未能枚举显示器，退化为单个全屏覆盖层");
+        let st_ev = state.clone();
         let overlay = CatOverlay::new(
             cfg.animation_mode.clone(),
             break_minutes,
             snooze_count,
             walk.clone(),
             idle_v.clone(),
+            move |ev| dispatch_overlay_event(&st_ev, ev),
         );
         overlay.window.fullscreen();
         overlay.window.present();
         state.borrow_mut().overlays.push(overlay);
     }
     for monitor in monitors {
+        let st_ev = state.clone();
         let overlay = CatOverlay::new(
             cfg.animation_mode.clone(),
             break_minutes,
             snooze_count,
             walk.clone(),
             idle_v.clone(),
+            move |ev| dispatch_overlay_event(&st_ev, ev),
         );
         let geo = monitor.geometry();
         overlay.window.set_default_size(geo.width(), geo.height());
@@ -509,39 +503,18 @@ fn trigger_cat(state: &Rc<RefCell<AppState>>, manual: bool) {
         });
     }
 
-    // 轮询覆盖层事件
-    let state_poll = state.clone();
-    glib::timeout_add_local(Duration::from_millis(200), move || {
-        let events: Vec<OverlayEvent> = {
-            let s = state_poll.borrow();
-            let mut ev = Vec::new();
-            for ov in s.overlays.iter() {
-                ev.extend(ov.take_events());
-            }
-            ev
-        };
-        for e in events {
-            match e {
-                OverlayEvent::Dismissed => {
-                    dismiss_cat(&state_poll);
-                }
-                OverlayEvent::Snoozed => {
-                    snooze_cat(&state_poll);
-                }
-            }
-        }
-        // 注意：必须在上面的借用释放之后再取值，且不必先初始化再赋值
-        // （原写法 `let mut alive = false;` 会触发 unused_assignments）
-        let alive = {
-            let s = state_poll.borrow();
-            s.is_overlay_showing && !s.overlays.is_empty()
-        };
-        if alive {
-            glib::ControlFlow::Continue
-        } else {
-            glib::ControlFlow::Break
-        }
-    });
+}
+
+/// 覆盖层事件分发。
+///
+/// 覆盖层现在**直接回调**（不再走「事件队列 + 200ms 轮询」）：
+/// 轮询版一旦定时器提前退出，按钮就再也关不掉覆盖层 —— 实测
+/// 「再等 5 分钟」后第二次弹出时点关闭毫无反应。
+fn dispatch_overlay_event(state: &Rc<RefCell<AppState>>, ev: OverlayEvent) {
+    match ev {
+        OverlayEvent::Dismissed => dismiss_cat(state),
+        OverlayEvent::Snoozed => snooze_cat(state),
+    }
 }
 
 /// 只关闭覆盖层窗口、复位「正在显示」标志，**不清空计时**。
@@ -639,191 +612,6 @@ fn builtin_webm_dir() -> std::path::PathBuf {
     std::path::PathBuf::from("/usr/share/purr-pause-linux/webm")
 }
 
-/// 根据配置构造各消息源的运行时状态。
-fn build_sources(cfg: &Config) -> Vec<message::SourceRuntime> {
-    cfg.message_sources
-        .iter()
-        .map(|s| {
-            message::SourceRuntime::new(
-                s.id.clone(),
-                s.name.clone(),
-                s.list_url.clone(),
-                s.auth_headers.clone(),
-                s.enabled,
-            )
-        })
-        .collect()
-}
-
-/// 启动消息提醒轮询。每个源独立计时，首轮只建基线不弹动画。
-fn start_message_poll(state: &Rc<RefCell<AppState>>) {
-    let cfg = state.borrow().config.clone();
-    if !cfg.message_notify_enabled {
-        return;
-    }
-    let enabled_count = cfg.message_sources.iter().filter(|s| s.enabled).count();
-    if enabled_count == 0 {
-        return;
-    }
-    log_line(state, &format!("消息提醒轮询已启动, 启用源数={enabled_count}"));
-
-    let client = message::build_client();
-
-    for (idx, _src) in cfg.message_sources.iter().enumerate() {
-        // 错峰启动，避免同时打接口
-        let delay = std::time::Duration::from_millis(idx as u64 * 300);
-        let st = state.clone();
-        let client = client.clone();
-
-        glib::timeout_add_local_once(delay, move || {
-            poll_once(&st, &client);
-            schedule_next(&st, &client);
-        });
-    }
-}
-
-/// 排下一次轮询（按各源失败次数应用指数退避）。
-fn schedule_next(state: &Rc<RefCell<AppState>>, client: &reqwest::Client) {
-    let interval = {
-        let s = state.borrow();
-        // 消息提醒被关闭时不再续排，避免留下永不休眠的空转定时器。
-        // 重新开启时由 toggle_message_notify 重新启动轮询链。
-        if !s.config.message_notify_enabled {
-            log_line(state, "消息提醒已关闭，停止轮询");
-            return;
-        }
-        // 取启用源中最小的下一次轮询间隔：
-        // 正常时为配置的基准间隔；连续失败 >=5 次的源按 2^(n-4) 退避（最高 300s）
-        let base = s.config.message_poll_interval.max(10) as u64;
-        s.sources
-            .iter()
-            .filter(|r| r.enabled && !r.list_url.is_empty())
-            .map(|r| r.poll_interval_secs(base as i64))
-            .min()
-            .unwrap_or(base)
-    };
-    let st = state.clone();
-    let c = client.clone();
-    glib::timeout_add_local_once(std::time::Duration::from_secs(interval), move || {
-        poll_once(&st, &c);
-        schedule_next(&st, &c);
-    });
-}
-
-/// 执行一轮轮询。
-fn poll_once(state: &Rc<RefCell<AppState>>, client: &reqwest::Client) {
-    // 取出待轮询的源快照，释放 borrow 后再发请求
-    let jobs: Vec<(usize, String, String)> = {
-        let s = state.borrow();
-        if !s.config.message_notify_enabled {
-            return;
-        }
-        s.sources
-            .iter()
-            .enumerate()
-            .filter(|(_, rt)| rt.enabled && !rt.list_url.is_empty())
-            .map(|(i, rt)| (i, rt.list_url.clone(), rt.auth_headers.clone()))
-            .collect()
-    };
-
-    if jobs.is_empty() {
-        return;
-    }
-
-    let max_items = state.borrow().config.message_max_cache_items;
-    let rt_names: Vec<String> = jobs
-        .iter()
-        .map(|(i, _, _)| state.borrow().sources[*i].name.clone())
-        .collect();
-
-    // 同步阻塞请求会卡住 UI，这里限制为串行单次，
-    // 单源超时 5 秒，最坏情况下阻塞主循环 5 秒 —— 需在真机验证是否可接受。
-    // TODO: 改用 gio::async 或独立线程 + channel。
-    for ((idx, list_url, auth_headers), name) in jobs.into_iter().zip(rt_names) {
-        // GTK 主循环无法直接 await，这里用阻塞执行器把 async future 拉平。
-        // 单源超时 5 秒（见 message::build_client 的 timeout 设置），最坏情况会阻塞主循环数秒。
-        let probe = message::SourceRuntime::new(
-            "tmp".into(),
-            name.clone(),
-            list_url,
-            auth_headers,
-            true,
-        );
-        let result = block_on(message::fetch_source(client, &probe, max_items));
-
-        // 先把结果应用到 target 上并取出要记的日志，
-        // 然后释放 target 对 s 的可变借用，才能再借用 s.log（E0502）。
-        let pending: Option<(bool, String)> = {
-            let mut s = state.borrow_mut();
-            let target = &mut s.sources[idx];
-            let entry = match result {
-                Ok((total, items)) => {
-                    target.consecutive_failures = 0;
-                    target.last_error.clear();
-                    target.list_in_flight = false;
-                    let is_first = target.first_sync;
-                    let new_count = message::apply_items(target, items, total);
-                    target.first_sync = false;
-                    // true = info, false = warn
-                    (!is_first && new_count > 0).then(|| {
-                        (
-                            true,
-                            format!("[消息提醒][{name}] 检测到 {new_count} 条新待办"),
-                        )
-                    })
-                }
-                Err(e) => {
-                    target.consecutive_failures += 1;
-                    target.last_error = e.clone();
-                    target.list_in_flight = false;
-                    let n = target.consecutive_failures;
-                    Some((
-                        false,
-                        format!("[消息提醒][{name}] 拉取失败：{e}（连续失败 {n} 次）"),
-                    ))
-                }
-            };
-            s.badge_count = s.sources.iter().filter(|r| r.enabled).map(|r| r.badge_count).sum();
-            entry
-        };
-
-        // 此时已无可变借用
-        match pending {
-            Some((true, msg)) => log_line(state, &msg),
-            Some((false, msg)) => {
-                let s = state.borrow();
-                s.log.warn(&msg);
-            }
-            None => {}
-        }
-        refresh_tray(state);
-    }
-}
-
-/// 简易阻塞执行器：把 async future 适配到 GTK 主循环。
-/// 仅用于消息轮询这类低频、可容忍短暂阻塞的场景。
-fn block_on<F: std::future::Future>(fut: F) -> F::Output {
-    use std::sync::Arc;
-    use std::task::{Context, Poll, Wake, Waker};
-
-    struct NoopWaker;
-    impl Wake for NoopWaker {
-        fn wake(self: Arc<Self>) {}
-    }
-
-    let mut fut = Box::pin(fut);
-    let waker = Waker::from(Arc::new(NoopWaker));
-    let mut cx = Context::from_waker(&waker);
-
-    loop {
-        match fut.as_mut().poll(&mut cx) {
-            Poll::Ready(v) => return v,
-            // reqwest 的 I/O 由内部 runtime 驱动，Pending 时短暂让出即可
-            Poll::Pending => std::thread::sleep(std::time::Duration::from_millis(10)),
-        }
-    }
-}
-
 // ---------------------------------------------------------------------------
 // 托盘
 // ---------------------------------------------------------------------------
@@ -878,28 +666,6 @@ fn build_tray_items(state: &Rc<RefCell<AppState>>) -> Vec<TrayItem> {
         action: None,
     }];
 
-    // 待办消息：点击打开列表窗口
-    let st_msg = state.clone();
-    items.push(TrayItem {
-        label: format!("待办消息（{}）", s.badge_count),
-        sensitive: true,
-        submenu: None,
-        action: Some(Box::new(move || open_message_list(&st_msg))),
-    });
-    // 消息提醒开关：直接在托盘里切换，无需进设置窗口
-    let st_toggle = state.clone();
-    let notify_label = if s.config.message_notify_enabled {
-        "关闭消息提醒"
-    } else {
-        "开启消息提醒"
-    };
-    items.push(TrayItem {
-        label: notify_label.to_string(),
-        sensitive: true,
-        submenu: None,
-        action: Some(Box::new(move || toggle_message_notify(&st_toggle))),
-    });
-
     // 分隔留白（不可点击）
     items.push(TrayItem {
         label: "---".to_string(),
@@ -918,17 +684,13 @@ fn build_tray_items(state: &Rc<RefCell<AppState>>) -> Vec<TrayItem> {
             action: Some(Box::new(move || resume_monitoring(&st))),
         });
     } else {
-        items.push(TrayItem {
-            label: "暂停监控".to_string(),
-            sensitive: true,
-            submenu: Some(vec![
-                pause_item(state, "30 分钟", 30),
-                pause_item(state, "1 小时", 60),
-                pause_item(state, "2 小时", 120),
-                pause_item(state, "直到手动恢复", 0),
-            ]),
-            action: None,
-        });
+        // ⚠️ 不要用 submenu：GNOME 的 appindicator 扩展对二级菜单支持不稳定，
+        //    实测「暂停监控」点了完全没反应（子菜单根本不弹）。
+        //    这里把四个选项直接平铺到一级菜单，保证点了就生效。
+        items.push(pause_item(state, "暂停 30 分钟", 30));
+        items.push(pause_item(state, "暂停 1 小时", 60));
+        items.push(pause_item(state, "暂停 2 小时", 120));
+        items.push(pause_item(state, "暂停到手动恢复", 0));
     }
 
     let st_settings = state.clone();
@@ -1019,50 +781,6 @@ fn tray_signature(items: &[TrayItem]) -> String {
     let mut s = String::new();
     walk(items, &mut s);
     s
-}
-
-/// 打开待办消息列表窗口。
-///
-/// 即使消息提醒未开启也照常打开 —— 列表窗口内部会显示「未启用」占位文案，
-/// 这样用户能从窗口里直接看到原因，而不是只看到一句终端输出。
-fn open_message_list(state: &Rc<RefCell<AppState>>) {
-    // 同上：先收掉全屏覆盖层，否则列表窗口会被压在下面
-    close_overlays(state);
-    let snapshot = {
-        let s = state.borrow();
-        message::aggregate(&s.sources, s.config.message_notify_enabled)
-    };
-    ui::message_list::present(snapshot, state.clone());
-}
-
-/// 在托盘里切换消息提醒总开关。
-fn toggle_message_notify(state: &Rc<RefCell<AppState>>) {
-    let (enabled, has_enabled_source) = {
-        let mut s = state.borrow_mut();
-        s.config.message_notify_enabled = !s.config.message_notify_enabled;
-        let has = s
-            .config
-            .message_sources
-            .iter()
-            .any(|src| src.enabled && !src.list_url.is_empty());
-        (s.config.message_notify_enabled, has)
-    };
-
-    let cfg = state.borrow().config.clone();
-    let _ = config::save(&cfg);
-
-    if enabled {
-        if has_enabled_source {
-            log_line(state, "消息提醒已开启，启动轮询");
-            start_message_poll(state);
-        } else {
-            log_line(state, "消息提醒已开启，但没有已启用的接口源");
-        }
-    } else {
-        log_line(state, "消息提醒已关闭");
-    }
-
-    refresh_tray(state);
 }
 
 /// 在文件管理器中打开日志目录。

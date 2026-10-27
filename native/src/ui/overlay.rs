@@ -122,7 +122,6 @@ struct Ctx {
 pub struct CatOverlay {
     pub window: gtk::Window,
     ctx: Rc<Ctx>,
-    events: Rc<RefCell<Vec<OverlayEvent>>>,
 }
 
 impl CatOverlay {
@@ -132,6 +131,7 @@ impl CatOverlay {
         snooze_count: i64,
         walk_video: PathBuf,
         idle_video: PathBuf,
+        on_event: impl Fn(OverlayEvent) + 'static,
     ) -> Self {
         install_css();
 
@@ -214,7 +214,20 @@ impl CatOverlay {
         root.append(&bar);
         window.set_child(Some(&root));
 
-        let events: Rc<RefCell<Vec<OverlayEvent>>> = Rc::new(RefCell::new(Vec::new()));
+        // 事件**直接回调**给 main，不再用「Vec + 200ms 轮询」。
+        // 轮询版有个致命缺陷：只要那个定时器因为任何原因先退出，
+        // 按钮就再也关不掉覆盖层 —— 实测「再等 5 分钟」后第二次弹出时
+        // 点关闭毫无反应，正是这个原因。
+        let cb: Rc<dyn Fn(OverlayEvent)> = Rc::new(on_event);
+        let emit: Rc<dyn Fn(OverlayEvent)> = {
+            let cb = cb.clone();
+            Rc::new(move |ev| {
+                let cb = cb.clone();
+                // 延后到下一轮主循环再执行：在自己的点击回调里直接销毁
+                // 所在的窗口容易踩重入。
+                glib::idle_add_local_once(move || cb(ev));
+            })
+        };
 
         let ctx = Rc::new(Ctx {
             state: Rc::new(RefCell::new(CatState::default())),
@@ -292,22 +305,22 @@ impl CatOverlay {
         // ── 逃生通道 ───────────────────────────────────────────────
         // 1) 点窗口关闭按钮 / Alt+F4
         {
-            let ev = events.clone();
+            let emit = emit.clone();
             let c = ctx.clone();
             window.connect_close_request(move |_| {
                 // 窗口被外部关掉时也要停掉定时器，否则它们会一直空转
                 c.alive.set(false);
-                ev.borrow_mut().push(OverlayEvent::Dismissed);
+                emit(OverlayEvent::Dismissed);
                 glib::Propagation::Proceed
             });
         }
         // 2) Esc
         {
             let key = gtk::EventControllerKey::new();
-            let ev = events.clone();
+            let emit = emit.clone();
             key.connect_key_pressed(move |_, k, _, _| {
                 if k == gtk::gdk::Key::Escape {
-                    ev.borrow_mut().push(OverlayEvent::Dismissed);
+                    emit(OverlayEvent::Dismissed);
                     glib::Propagation::Stop
                 } else {
                     glib::Propagation::Proceed
@@ -319,10 +332,10 @@ impl CatOverlay {
         {
             let click = gtk::GestureClick::new();
             click.set_button(gtk::gdk::BUTTON_PRIMARY);
-            let ev = events.clone();
+            let emit = emit.clone();
             click.connect_pressed(move |_, n_press, _, _| {
                 if n_press >= 2 {
-                    ev.borrow_mut().push(OverlayEvent::Dismissed);
+                    emit(OverlayEvent::Dismissed);
                 }
             });
             frame.add_controller(click);
@@ -330,33 +343,24 @@ impl CatOverlay {
 
         // ── 按钮 ───────────────────────────────────────────────────
         {
-            let ev = events.clone();
-            dismiss_btn.connect_clicked(move |_| ev.borrow_mut().push(OverlayEvent::Dismissed));
-            let ev = events.clone();
-            close_btn.connect_clicked(move |_| ev.borrow_mut().push(OverlayEvent::Dismissed));
-            let ev = events.clone();
-            snooze_btn.connect_clicked(move |_| ev.borrow_mut().push(OverlayEvent::Snoozed));
+            let e = emit.clone();
+            dismiss_btn.connect_clicked(move |_| e(OverlayEvent::Dismissed));
+            let e = emit.clone();
+            close_btn.connect_clicked(move |_| e(OverlayEvent::Dismissed));
+            let e = emit.clone();
+            snooze_btn.connect_clicked(move |_| e(OverlayEvent::Snoozed));
         }
 
         begin(
             ctx.clone(),
-            events.clone(),
+            emit.clone(),
             animation_mode,
             walk_video,
             idle_video,
             break_minutes,
         );
 
-        Self {
-            window,
-            ctx,
-            events,
-        }
-    }
-
-    pub fn take_events(&self) -> Vec<OverlayEvent> {
-        let mut ev = self.events.borrow_mut();
-        std::mem::take(&mut *ev)
+        Self { window, ctx }
     }
 
     pub fn close(&self) {
@@ -378,7 +382,7 @@ impl CatOverlay {
 ///   · 16ms 逻辑节拍 —— 几何动画、事件泵、倒计时。
 fn begin(
     ctx: Rc<Ctx>,
-    events: Rc<RefCell<Vec<OverlayEvent>>>,
+    emit: Rc<dyn Fn(OverlayEvent)>,
     mode: String,
     walk_video: PathBuf,
     idle_video: PathBuf,
@@ -534,9 +538,9 @@ fn begin(
             let elapsed = cs.elapsed().as_secs();
             if elapsed >= total_secs {
                 ctx.countdown.set_text("休息结束！");
-                let ev = events.clone();
+                let e = emit.clone();
                 glib::timeout_add_local_once(Duration::from_millis(1500), move || {
-                    ev.borrow_mut().push(OverlayEvent::Dismissed);
+                    e(OverlayEvent::Dismissed);
                 });
                 return glib::ControlFlow::Break;
             }
