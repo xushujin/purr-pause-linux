@@ -686,11 +686,14 @@ fn build_tray_items(state: &Rc<RefCell<AppState>>) -> Vec<TrayItem> {
     //      实测「暂停监控」点了完全没反应（子菜单根本不弹）。四个选项平铺。
     //   2. 平铺后要能看出「当前选的是哪个」—— 用 dbusmenu 的 radio 勾选态
     //      （toggle-type + toggle-state），否则点了之后菜单里毫无反馈。
-    if s.is_paused {
+    // 「恢复监控」**恒定存在**（未暂停时禁用）。
+    // 菜单结构必须固定 —— 结构一变，dbusmenu 的条目 id 就会整体挪位，
+    // 宿主（GNOME 扩展）的菜单模型跟着错位，表现就是「点 A 触发了 B」。
+    {
         let st = state.clone();
         items.push(TrayItem {
             label: "恢复监控".to_string(),
-            sensitive: true,
+            sensitive: s.is_paused,
             submenu: None,
             checked: None,
             action: Some(Box::new(move || resume_monitoring(&st))),
@@ -760,22 +763,34 @@ fn build_tray_items(state: &Rc<RefCell<AppState>>) -> Vec<TrayItem> {
 /// 「菜单能打开，但点了没反应，也退不出去」。
 fn refresh_tray(state: &Rc<RefCell<AppState>>) {
     let items = build_tray_items(state);
-    let sig = tray_signature(&items);
-    let changed = TRAY_SIG.with(|s| {
+    if items.is_empty() {
+        return;
+    }
+
+    // 第一个条目是「距下次休息: N 分钟」，它每分钟都会变。
+    // **绝不能**因为它变化就整份重建菜单：重建会换一套 id + 广播 LayoutUpdated，
+    // 宿主处理不干净就会错位（实测：动作整体错开一位、末尾多出一个「退出」）。
+    // 结构签名只看其余条目，变了才重建；只有倒计时变了就单独推一个 label。
+    let head_label = items[0].label.clone();
+    let rest_sig = tray_signature(&items[1..]);
+    let rest_changed = TRAY_SIG.with(|s| {
         let mut cur = s.borrow_mut();
-        if *cur == sig {
+        if *cur == rest_sig {
             false
         } else {
-            *cur = sig;
+            *cur = rest_sig;
             true
         }
     });
-    if !changed {
-        return;
-    }
+
     TRAY.with(|t| {
         if let Some(tray) = t.borrow_mut().as_mut() {
-            tray.set_menu(items);
+            if rest_changed {
+                tray.set_menu(items);
+            } else {
+                // 第一个条目在 set_menu 里的 id 恒为 1
+                tray.update_label(1, &head_label);
+            }
         }
     });
 }

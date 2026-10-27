@@ -317,6 +317,46 @@ impl Tray {
             Some(&params),
         );
     }
+    /// 只更新某个条目的 label，并广播 `ItemsPropertiesUpdated`。
+    ///
+    /// 为什么不直接 `set_menu` 重建：dbusmenu 的宿主（GNOME 扩展）是按
+    /// 「布局树 + 条目 id」维护菜单模型的。每次重建都会换一套 id 并广播
+    /// `LayoutUpdated`，宿主如果处理不干净就会错位 —— 实测用户看到的是
+    /// **菜单项动作整体错开一位、末尾多出一个「退出」**。
+    /// 所以结构固定、id 固定，只把会变的那一个 label 推过去。
+    pub fn update_label(&mut self, id: i32, label: &str) {
+        let (props, menu_path) = {
+            let mut sh = self.shared.borrow_mut();
+            let Some(node) = sh.items.get_mut(&id) else {
+                return;
+            };
+            if node.label == label {
+                return;
+            }
+            node.label = label.to_string();
+
+            // a{sv} 的 value 必须包一层 v
+            let entries = vec![glib::Variant::from_dict_entry(
+                &"label".to_variant(),
+                &glib::Variant::from_variant(&label.to_variant()),
+            )];
+            (array_of("{sv}", entries), sh.menu_path.clone())
+        };
+
+        let updated = array_of(
+            "(ia{sv})",
+            vec![glib::Variant::tuple_from_iter([id.to_variant(), props])],
+        );
+        let removed = array_of("(ias)", Vec::<glib::Variant>::new());
+        let params = glib::Variant::tuple_from_iter([updated, removed]);
+        let _ = self.conn.emit_signal(
+            None,
+            &menu_path,
+            "com.canonical.dbusmenu",
+            "ItemsPropertiesUpdated",
+            Some(&params),
+        );
+    }
 }
 
 /// 把单个条目（及其子树）插入 items 表并挂到 parent 下。

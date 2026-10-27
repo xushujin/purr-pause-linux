@@ -43,7 +43,10 @@ const MAX_SCREEN_WIDTH_RATIO: f64 = 0.9;
 /// 走路动画时长（毫秒）。
 const WALK_MS: f64 = 3000.0;
 /// 走路兜底：超过这个时间无论视频是否播完都进入休息态。
-const WALK_FALLBACK_MS: f64 = 5200.0;
+///
+/// ⚠️ 必须明显大于素材本身的时长。内置 cat-walk.webm 是 8.4 秒，
+/// 原来写 5200ms 会在视频**播到一半**就硬切到躺下动画 —— 看起来就是卡顿。
+const WALK_FALLBACK_MS: f64 = 14000.0;
 /// 控制条最迟出现时间 —— 用户必须能随时关掉它。
 const BAR_DEADLINE_MS: f64 = 1200.0;
 /// 视频多久没出帧就判定失败，降级为静态猫图。

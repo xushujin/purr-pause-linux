@@ -510,6 +510,8 @@ pub struct VideoPlayer {
     /// 持有 GLArea 的弱引用，仅用于日志/调试用途
     gl_area: glib::WeakRef<gtk::GLArea>,
     loaded: String,
+    /// 是否已经打印过渲染目标（只打一次）
+    logged_fbo: bool,
 }
 
 impl VideoPlayer {
@@ -656,6 +658,7 @@ impl VideoPlayer {
             update_flag,
             gl_area: gl_area.downgrade(),
             loaded: String::new(),
+            logged_fbo: false,
         })
     }
 
@@ -711,19 +714,22 @@ impl VideoPlayer {
     ///   · `源alpha=no`      → 解码后没有 alpha（抠像滤镜没生效）
     ///   · `alpha选项` 不是 yes → mpv 会把透明像素混合成黑底
     pub fn debug_dump(&self) {
-        let fmt = self.get_str("video-params/pixelformat").unwrap_or_default();
-        let src_alpha = self.get_str("video-params/alpha").unwrap_or_default();
+        // ⚠️ 这里**不要**读 fbo：本函数由定时器调用，此时 GTK 的 GL 上下文
+        //    并没有 current，glGetIntegerv 只会读到 0（曾经因此误判过一轮）。
+        //    真实的 fbo 在 draw() 里打印。
+        let dec = self.get_str("video-params/pixelformat").unwrap_or_default();
+        let out = self.get_str("video-out-params/pixelformat").unwrap_or_default();
         let alpha_opt = self.get_str("alpha").unwrap_or_default();
         let hwdec = self.get_str("hwdec-current").unwrap_or_default();
-        let fbo = current_fbo();
         eprintln!(
-            "[purr-pause-linux] 视频参数: pixelformat={fmt} 源alpha={src_alpha} alpha选项={alpha_opt} hwdec={hwdec} fbo={fbo}"
+            "[purr-pause-linux] 视频参数: 解码={dec} 滤镜后={out} alpha选项={alpha_opt} hwdec={hwdec}"
         );
-        if fbo == 0 {
-            eprintln!(
-                "[purr-pause-linux] ⚠️ 读不到 GL 帧缓冲（fbo=0），mpv 会把透明像素混成黑底"
-            );
-        }
+        eprintln!(
+            "[purr-pause-linux] 会话: type={} wayland={} 用EGL={}",
+            std::env::var("XDG_SESSION_TYPE").unwrap_or_else(|_| "?".into()),
+            std::env::var("WAYLAND_DISPLAY").is_ok(),
+            prefer_egl(),
+        );
     }
 
     /// 读取 int64 型属性。
@@ -829,6 +835,13 @@ impl VideoPlayer {
             return;
         }
         let fbo_id = current_fbo();
+        if !self.logged_fbo {
+            self.logged_fbo = true;
+            eprintln!(
+                "[purr-pause-linux] 渲染目标: fbo={fbo_id} internal_format={}",
+                if fbo_id == 0 { 0 } else { GL_RGBA8 }
+            );
+        }
         let mut fbo = MpvOpenglFbo {
             fbo: fbo_id,
             w,
