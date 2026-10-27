@@ -129,7 +129,14 @@ purr-pause-linux --selftest
 - `cat-walk.webm` — 走路动画（播放一次）
 - `cat-rest.webm` — 躺下动画（循环播放）
 
-要求：WebM 格式，VP9 编码，带 Alpha 通道（透明背景）。
+要求：WebM 格式，VP9 编码。
+
+**关于背景**：内置素材其实**不带 alpha 通道**，而是纯绿底（`#00AE3E`），
+应用在播放时用 libavfilter 的 `colorkey` 实时抠掉这个绿色。
+自备素材两种都可以：
+- 直接给带 Alpha 通道的 WebM（推荐，抠像滤镜对它无副作用）；
+- 或者沿用同样的纯绿底 `#00AE3E`。
+
 制作参考见 `native/data/README-assets.txt`。
 
 ## 授权

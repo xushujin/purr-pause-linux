@@ -53,7 +53,7 @@ pub fn present<F, T, L>(
         .title("胖猫暂停一下（PurrPause） 设置")
         .modal(false)
         .resizable(true)
-        .default_width(440)
+        .default_width(480)
         .build();
     // 关联到应用：窗口才会进入应用的窗口列表（任务栏分组、再次激活时前置）。
     // 未关联的裸窗口在 GTK4 里能显示，但不被 GtkApplication 管理。
@@ -67,16 +67,6 @@ pub fn present<F, T, L>(
     let cancel_btn = gtk::Button::with_label("关闭");
     header.pack_start(&cancel_btn);
     header.pack_end(&save_btn);
-
-    // 「退出应用」：常驻进程必须有一个显式退出入口。
-    let quit_btn = gtk::Button::with_label("退出应用");
-    quit_btn.add_css_class("destructive-action");
-    quit_btn.set_tooltip_text(Some("完全退出应用，停止后台的休息提醒"));
-    header.pack_start(&quit_btn);
-    quit_btn.connect_clicked(move |_| {
-        // 与托盘菜单的「退出」一致：直接结束进程。
-        std::process::exit(0);
-    });
 
     let page = adw::PreferencesPage::new();
 
@@ -114,6 +104,21 @@ pub fn present<F, T, L>(
         let on_open_log = Rc::new(on_open_log);
         log_btn.connect_clicked(move |_| (on_open_log)());
     }
+
+    // 「退出应用」：常驻进程必须有一个显式退出入口。
+    // 放在这里而不是标题栏 —— 标题栏挤三个按钮会把窗口标题压没。
+    let quit_row = adw::ActionRow::new();
+    quit_row.set_title("退出应用");
+    quit_row.set_subtitle("完全退出应用，停止后台的休息提醒");
+    let quit_btn = gtk::Button::with_label("退出");
+    quit_btn.add_css_class("destructive-action");
+    quit_btn.set_valign(gtk::Align::Center);
+    quit_row.add_suffix(&quit_btn);
+    quick_group.add(&quit_row);
+    quit_btn.connect_clicked(move |_| {
+        // 与托盘菜单的「退出」一致：直接结束进程。
+        std::process::exit(0);
+    });
 
     // 未激活时把「动画模式 / 素材目录」灰掉是 electron 版的旧设计，
     // 但实测体感极差：用户打开设置发现一半控件点不动，只会认为「设置坏了」。
@@ -182,7 +187,7 @@ pub fn present<F, T, L>(
     let path_entry = gtk::Entry::new();
     path_entry.set_text(&current.custom_webm_dir);
     path_entry.set_placeholder_text(Some("留空 = 使用默认目录"));
-    path_entry.set_width_chars(20);
+    path_entry.set_hexpand(true);
     path_entry.set_valign(gtk::Align::Center);
     path_entry.set_tooltip_text(Some("可以直接把路径粘贴到这里"));
 
@@ -191,10 +196,19 @@ pub fn present<F, T, L>(
     let clear_btn = gtk::Button::with_label("重置");
     clear_btn.set_valign(gtk::Align::Center);
     clear_btn.set_sensitive(!current.custom_webm_dir.is_empty());
-    asset_row.add_suffix(&path_entry);
     asset_row.add_suffix(&pick_btn);
     asset_row.add_suffix(&clear_btn);
     group.add(&asset_row);
+
+    // ⚠️ 输入框必须单独占一行。
+    // 之前塞进 ActionRow 的 suffix，三个控件（输入框 + 两个按钮）抢宽度，
+    // 结果标题「素材目录」被压成每行一个字的竖排 —— 就是用户看到的「样式乱了」。
+    let entry_box = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    entry_box.set_margin_start(12);
+    entry_box.set_margin_end(12);
+    entry_box.set_margin_bottom(12);
+    entry_box.append(&path_entry);
+    group.add(&entry_box);
 
     // ⚠️ 必须用当前值初始化，不能给空路径。
     // 历史 bug：这里曾是 `PathBuf::new()`，而保存回调会把 holder 的内容当作

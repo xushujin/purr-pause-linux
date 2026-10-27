@@ -485,6 +485,19 @@ impl VideoPlayer {
             ("really-quiet", "yes"),
             // 保留 alpha 通道（透明背景 webm 必需）
             ("alpha", "yes"),
+            // ── 抠像 ────────────────────────────────────────────────
+            // 实测内置素材 **没有 alpha 通道**（ffprobe: pix_fmt=yuv420p，
+            // 1920×1080 不透明），背景是纯绿 #00AE3E。之前一直以为「绿幕」
+            // 是 alpha 丢了，其实是素材本身就是绿底。
+            //
+            // 这里用 libavfilter 的 colorkey 在解码后把纯绿抠成透明，
+            // 输出 yuva420p；配合上面的 alpha=yes，vo_gpu 就会保留 alpha。
+            // 选 0x00AE3E 精确匹配 + 较小容差，避免误伤猫身上的颜色。
+            // 若用户自备素材本来就是带 alpha 的 webm，这里等于没起作用。
+            (
+                "vf",
+                "lavfi=[colorkey=0x00AE3E:0.25:0.10]",
+            ),
             ("scale", "bilinear"),
             ("keep-open", "yes"),
             ("keep-open-pause", "yes"),
