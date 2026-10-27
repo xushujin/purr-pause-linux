@@ -846,11 +846,17 @@ impl VideoPlayer {
             fbo: fbo_id,
             w,
             h,
-            // ⚠️ internal_format 传 0 会被 mpv 当成「默认帧缓冲」处理，
-            //    alpha 通道可能被丢弃（表现为视频里的绿底透出来）。
-            //    GTK 的 GLArea 渲染到自己的离屏 FBO，那里是 RGBA8，
-            //    所以这里显式告诉 mpv。fbo==0 时才保持 0（默认帧缓冲）。
-            internal_format: if fbo_id == 0 { 0 } else { GL_RGBA8 },
+            // ⚠️ **无条件**告诉 mpv「目标是带 alpha 的 RGBA8」。
+            //
+            // 之前按 `fbo_id == 0 ? 0 : GL_RGBA8` 来给，实测在这台机器上
+            // `fbo_id` 读出来是 0（GTK 的 GLArea FBO 号拿不到），于是
+            // internal_format 也变成 0 —— mpv 就把目标当成「没有 alpha 的
+            // 默认帧缓冲」，把 colorkey 抠出来的透明像素混合成黑色。
+            // 诊断行 `滤镜后=argb` 证明 alpha 是有的，问题只在这一句。
+            //
+            // GTK4 的 GLArea 离屏纹理固定是 GL_RGBA8（gtkglarea.c 里写死），
+            // Wayland 的默认帧缓冲也是 RGBA，所以无条件给 RGBA8 是对的。
+            internal_format: GL_RGBA8,
         };
         let mut flip_y: c_int = FLIP_Y;
         // 先把 FBO 清成透明黑：mpv 只覆盖视频区域（宽高比不同时四周留空），

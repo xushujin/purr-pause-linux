@@ -519,7 +519,11 @@ fn menu_method(
             invocation.return_value(Some(&no_reply()));
             if event == "clicked" {
                 if let Some(a) = action {
-                    a();
+                    // ⚠️ 延后到下一轮主循环再执行。
+                    //    动作里通常会 refresh_tray → set_menu → emit LayoutUpdated，
+                    //    在当前 D-Bus 方法调用栈里做这些容易踩重入，
+                    //    实测出现过「点了没反应」。
+                    glib::idle_add_local_once(move || a());
                 }
             }
         }
@@ -543,7 +547,7 @@ fn menu_method(
             invocation
                 .return_value(Some(&glib::Variant::tuple_from_iter([array_of("i", errors)])));
             for a in actions {
-                a();
+                glib::idle_add_local_once(move || a());
             }
         }
         "AboutToShow" => {

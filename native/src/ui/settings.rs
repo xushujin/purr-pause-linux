@@ -170,11 +170,9 @@ pub fn present<F, T, L>(
 
     // ── 4. 素材目录 ─────────────────────────────────────────────
     //
-    // ⚠️ 这里必须给一个**可直接编辑的输入框**。
-    // 原生文件选择器在缺 xdg-desktop-portal / gvfs 的桌面上会直接报
-    // 「无法显示文件夹内容」（还会伴随 GtkDialog mapped without a
-    // transient parent 警告），用户根本选不了目录。
-    // 输入框永远可用，选择器退化成辅助手段。
+    // 只有「浏览 / 重置」两个后缀按钮。之前还塞了一个路径输入框，
+    // 结果它被 PreferencesGroup 排到整组的最底部（截图里那个孤零零的输入框），
+    // 既不像样又容易被误认为「多出来的控件」。选择器本身已经能用，输入框去掉。
     let asset_row = adw::ActionRow::new();
     asset_row.set_title("素材目录");
     // ActionRow::set_subtitle 收 &str（不是 Option<&str>、也不是 String）
@@ -183,13 +181,6 @@ pub fn present<F, T, L>(
     } else {
         &current.custom_webm_dir
     });
-
-    let path_entry = gtk::Entry::new();
-    path_entry.set_text(&current.custom_webm_dir);
-    path_entry.set_placeholder_text(Some("留空 = 使用默认目录"));
-    path_entry.set_hexpand(true);
-    path_entry.set_valign(gtk::Align::Center);
-    path_entry.set_tooltip_text(Some("可以直接把路径粘贴到这里"));
 
     let pick_btn = gtk::Button::with_label("浏览");
     pick_btn.set_valign(gtk::Align::Center);
@@ -200,16 +191,6 @@ pub fn present<F, T, L>(
     asset_row.add_suffix(&clear_btn);
     group.add(&asset_row);
 
-    // ⚠️ 输入框必须单独占一行。
-    // 之前塞进 ActionRow 的 suffix，三个控件（输入框 + 两个按钮）抢宽度，
-    // 结果标题「素材目录」被压成每行一个字的竖排 —— 就是用户看到的「样式乱了」。
-    let entry_box = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-    entry_box.set_margin_start(12);
-    entry_box.set_margin_end(12);
-    entry_box.set_margin_bottom(12);
-    entry_box.append(&path_entry);
-    group.add(&entry_box);
-
     // ⚠️ 必须用当前值初始化，不能给空路径。
     // 历史 bug：这里曾是 `PathBuf::new()`，而保存回调会把 holder 的内容当作
     // 新配置写回 —— 于是用户只要打开设置点一下「保存」，已配置的素材目录就被清空了。
@@ -218,48 +199,36 @@ pub fn present<F, T, L>(
     )));
     let dir_holder_save = dir_holder.clone();
 
-    // 输入框是唯一的数据源：改它 → 同步 holder、副标题、重置按钮状态
-    {
-        let h = dir_holder.clone();
-        let sub = asset_row.clone();
-        let clear = clear_btn.clone();
-        path_entry.connect_changed(move |e| {
-            let text = e.text().to_string();
-            *h.borrow_mut() = crate::ui::dir_picker::expand_tilde(&text);
-            clear.set_sensitive(!text.trim().is_empty());
-            if text.trim().is_empty() {
-                sub.set_subtitle("使用默认目录");
-            } else {
-                sub.set_subtitle(&text);
-            }
-        });
-    }
-
-    // 浏览：原生目录选择器（仅辅助）。
-    // ⚠️ transient parent 直接传窗口本体 —— 之前用 `pick_btn.root()` 推断，
-    //    拿不到就变成无父窗口的对话框（GtkDialog mapped without a transient parent）。
+    // 浏览：用自实现的目录选择器（GTK 自带的在缺 portal/gvfs 时列不出目录）
     {
         let win = window.clone();
-        let entry = path_entry.clone();
         let holder = dir_holder.clone();
+        let sub = asset_row.clone();
+        let clear = clear_btn.clone();
         pick_btn.connect_clicked(move |_| {
-            // ⚠️ 不用 GtkFileChooserNative / FileChooserDialog：
-            //    在缺 xdg-desktop-portal / gvfs 的桌面上它会报
-            //    「无法显示文件夹内容」，完全列不出目录（用户实测）。
-            //    改用自实现的目录选择器，纯 std::fs，任何环境都能用。
             let start = holder.borrow().clone();
-            let e = entry.clone();
+            let h = holder.clone();
+            let s2 = sub.clone();
+            let c2 = clear.clone();
             crate::ui::dir_picker::pick(&win, Some(start), move |picked| {
-                // 写进输入框即可，holder / 副标题由 connect_changed 联动
-                e.set_text(&picked.to_string_lossy());
+                let text = picked.to_string_lossy().to_string();
+                *h.borrow_mut() = picked;
+                s2.set_subtitle(&text);
+                c2.set_sensitive(true);
             });
         });
     }
 
-    // 重置：清空输入框（同上，联动由 connect_changed 负责）
+    // 重置
     {
-        let e = path_entry.clone();
-        clear_btn.connect_clicked(move |_| e.set_text(""));
+        let holder = dir_holder.clone();
+        let sub = asset_row.clone();
+        let clear = clear_btn.clone();
+        clear_btn.connect_clicked(move |_| {
+            holder.borrow_mut().clear();
+            sub.set_subtitle("使用默认目录");
+            clear.set_sensitive(false);
+        });
     }
 
     // ── 5. 开机自动启动 ─────────────────────────────────────────
@@ -334,8 +303,11 @@ pub fn present<F, T, L>(
         toast.add_toast(adw::Toast::new("设置已保存"));
     });
 
+    // ⚠️ 用 destroy() 而不是 close()：close() 走的是 close_request 信号 +
+    //    WM 协作，实测在这台机器上「点关闭没反应」。destroy() 直接把顶层窗口
+    //    拆掉，不依赖任何外部条件。
     let win3 = window.clone();
-    cancel_btn.connect_clicked(move |_| win3.close());
+    cancel_btn.connect_clicked(move |_| win3.destroy());
 
     // 存入槽（强引用持有）+ 销毁时清槽：
     // 用户点标题栏 X / 关闭后窗口销毁，下次打开能拿到最新配置重建。

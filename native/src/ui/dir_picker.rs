@@ -20,7 +20,7 @@
 use adw::prelude::*;
 use gtk::glib;
 use std::cell::RefCell;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::rc::Rc;
 
 thread_local! {
@@ -158,15 +158,12 @@ where
     window.present();
 }
 
-/// 关窗：先 close()，150ms 后若还可见就强制 destroy()。
+/// 关窗：直接 destroy()。
+///
+/// 不用 close() —— 它依赖 close_request 信号与窗口管理器协作，
+/// 实测在这台机器上「点了没反应」。destroy() 无条件拆掉顶层窗口。
 fn close_now(win: &gtk::Window) {
-    win.close();
-    let w = win.clone();
-    glib::timeout_add_local_once(std::time::Duration::from_millis(150), move || {
-        if w.is_visible() {
-            w.destroy();
-        }
-    });
+    win.destroy();
 }
 
 /// 重建列表内容（进入子目录 / 返回上级都走这里）。
@@ -237,23 +234,4 @@ fn refill(list: &gtk::ListBox, path_label: &gtk::Label, current: &Rc<RefCell<Pat
         });
         list.append(&row);
     }
-}
-
-/// 把 `~` 展开成家目录（设置里允许用户手填 `~/webm` 这种路径）。
-pub fn expand_tilde(input: &str) -> PathBuf {
-    let s = input.trim();
-    if s.is_empty() {
-        return PathBuf::new();
-    }
-    if let Some(rest) = s.strip_prefix("~/") {
-        if let Some(home) = dirs::home_dir() {
-            return home.join(rest);
-        }
-    }
-    if s == "~" {
-        if let Some(home) = dirs::home_dir() {
-            return home;
-        }
-    }
-    Path::new(s).to_path_buf()
 }
