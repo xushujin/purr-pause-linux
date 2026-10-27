@@ -30,12 +30,6 @@ pub struct TrayItem {
     pub sensitive: bool,
     pub submenu: Option<Vec<TrayItem>>,
     pub action: Option<Box<dyn Fn()>>,
-    /// `Some(true/false)` → 渲染成单选组里的勾选状态（dbusmenu 的
-    /// `toggle-type: radio` + `toggle-state`）。`None` → 普通条目。
-    ///
-    /// 用途：托盘里的「暂停 30 分钟 / 1 小时 / …」要能看出当前选的是哪个 ——
-    /// 之前全是普通条目，点了之后菜单里没有任何反馈。
-    pub checked: Option<bool>,
 }
 
 // ---------------------------------------------------------------------------
@@ -151,7 +145,6 @@ struct MenuNode {
     is_separator: bool,
     children: Vec<i32>,
     action: Option<Rc<dyn Fn()>>,
-    checked: Option<bool>,
 }
 
 struct Shared {
@@ -217,7 +210,6 @@ impl Tray {
                     is_separator: false,
                     children: Vec::new(),
                     action: None,
-                    checked: None,
                 },
             )]),
             revision: 0,
@@ -297,7 +289,6 @@ impl Tray {
                     is_separator: false,
                     children: Vec::new(),
                     action: None,
-                    checked: None,
                 },
             );
             sh.next_id = 1;
@@ -373,7 +364,6 @@ fn flatten_item(item: TrayItem, sh: &mut Shared, parent_id: i32) {
         is_separator: is_sep,
         children: Vec::new(),
         action: None,
-        checked: item.checked,
     };
     if let Some(sub) = item.submenu {
         for sub_item in sub {
@@ -507,14 +497,13 @@ fn menu_method(
             let id = params.child_value(0).get::<i32>().unwrap_or(-1);
             let event = params.child_value(1).str().unwrap_or("").to_string();
             let action = sh.borrow().items.get(&id).and_then(|n| n.action.clone());
-            // 排查用：PURR_DEBUG=1 时把每次菜单点击打出来，
-            // 用来区分「宿主没把点击发过来」和「发了但动作没执行」。
-            if std::env::var_os("PURR_DEBUG").is_some() {
-                eprintln!(
-                    "[purr-pause-linux] 托盘 Event: id={id} event={event} 有动作={}",
-                    action.is_some()
-                );
-            }
+            // 始终打印：托盘菜单是唯一入口，出问题时必须能看出
+            // 「宿主没把点击发过来」还是「发了但动作没执行」。
+            // 只在用户点击时输出，不会刷屏。
+            eprintln!(
+                "[purr-pause-linux] 托盘点击: id={id} event={event} 有动作={}",
+                action.is_some()
+            );
             // 先应答再执行动作：动作里可能开窗口（重入主循环）
             invocation.return_value(Some(&no_reply()));
             if event == "clicked" {
@@ -621,11 +610,6 @@ fn item_props(item: &MenuNode, filter: Option<&[String]>) -> glib::Variant {
         }
         if !item.children.is_empty() {
             push("children-display", "submenu".to_variant());
-        }
-        // 单选勾选：dbusmenu 用 toggle-type + toggle-state(i32) 表示
-        if let Some(c) = item.checked {
-            push("toggle-type", "radio".to_variant());
-            push("toggle-state", (if c { 1i32 } else { 0i32 }).to_variant());
         }
     }
     dict_of(entries)

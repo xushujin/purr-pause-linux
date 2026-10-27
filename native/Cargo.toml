@@ -1,6 +1,6 @@
 [package]
 name = "purr-pause-linux"
-version = "1.7.0"
+version = "1.8.0"
 edition = "2021"
 description = "胖猫暂停一下（PurrPause Linux）- 一只胖猫提醒你适时休息"
 license = "MIT"

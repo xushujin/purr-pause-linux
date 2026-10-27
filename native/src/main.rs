@@ -665,19 +665,9 @@ fn build_tray_items(state: &Rc<RefCell<AppState>>) -> Vec<TrayItem> {
     let mut items = vec![TrayItem {
         label: remaining,
         sensitive: false,
-        checked: None,
         submenu: None,
         action: None,
     }];
-
-    // 分隔留白（不可点击）
-    items.push(TrayItem {
-        label: "---".to_string(),
-        sensitive: false,
-        checked: None,
-        submenu: None,
-        action: None,
-    });
 
     // 暂停 / 恢复
     //
@@ -695,7 +685,6 @@ fn build_tray_items(state: &Rc<RefCell<AppState>>) -> Vec<TrayItem> {
             label: "恢复监控".to_string(),
             sensitive: s.is_paused,
             submenu: None,
-            checked: None,
             action: Some(Box::new(move || resume_monitoring(&st))),
         });
     }
@@ -712,7 +701,6 @@ fn build_tray_items(state: &Rc<RefCell<AppState>>) -> Vec<TrayItem> {
     items.push(TrayItem {
         label: "设置".to_string(),
         sensitive: true,
-        checked: None,
         submenu: None,
         action: Some(Box::new(move || open_settings(&st_settings))),
     });
@@ -721,7 +709,6 @@ fn build_tray_items(state: &Rc<RefCell<AppState>>) -> Vec<TrayItem> {
     items.push(TrayItem {
         label: "查看日志".to_string(),
         sensitive: true,
-        checked: None,
         submenu: None,
         action: Some(Box::new(move || open_log_dir(&st_log))),
     });
@@ -730,21 +717,18 @@ fn build_tray_items(state: &Rc<RefCell<AppState>>) -> Vec<TrayItem> {
     items.push(TrayItem {
         label: "立即测试".to_string(),
         sensitive: true,
-        checked: None,
         submenu: None,
         action: Some(Box::new(move || trigger_cat(&st_test, true))),
     });
     items.push(TrayItem {
         label: format!("v{}", env!("CARGO_PKG_VERSION")),
         sensitive: false,
-        checked: None,
         submenu: None,
         action: None,
     });
     items.push(TrayItem {
         label: "退出".to_string(),
         sensitive: true,
-        checked: None,
         submenu: None,
         action: Some(Box::new(|| {
             std::process::exit(0);
@@ -832,6 +816,18 @@ fn open_log_dir(state: &Rc<RefCell<AppState>>) {
     let _ = std::process::Command::new("xdg-open").arg(&dir).spawn();
 }
 
+/// 发一条桌面通知。
+///
+/// 托盘菜单的状态刷新依赖宿主（GNOME 扩展）是否老实处理 LayoutUpdated，
+/// 实测并不可靠。桌面通知是另一条通道，用户能立刻确认「操作生效了」。
+fn notify(msg: &str) {
+    let Some(app) = APP.with(|a| a.borrow().clone()) else {
+        return;
+    };
+    let n = gtk::gio::Notification::new(msg);
+    app.send_notification(None, &n);
+}
+
 fn pause_item(
     state: &Rc<RefCell<AppState>>,
     label: &str,
@@ -840,10 +836,16 @@ fn pause_item(
 ) -> TrayItem {
     let st = state.clone();
     TrayItem {
-        label: label.to_string(),
+        // 用标签前缀表示「当前选中」。
+        // 之前用 dbusmenu 的 toggle-type=radio + toggle-state 做勾选，
+        // 结果整份菜单的动作全部错位（点 A 触发 B），去掉后恢复正常。
+        label: if checked {
+            format!("✓ {label}")
+        } else {
+            label.to_string()
+        },
         sensitive: true,
         submenu: None,
-        checked: Some(checked),
         action: Some(Box::new(move || pause_for(&st, minutes))),
     }
 }
@@ -855,6 +857,11 @@ fn pause_for(state: &Rc<RefCell<AppState>>, minutes: i64) {
         s.paused_minutes = minutes;
     }
     log_line(state, &format!("暂停监控 {minutes} 分钟"));
+    if minutes > 0 {
+        notify(&format!("已暂停监控 {minutes} 分钟"));
+    } else {
+        notify("已暂停监控，直到手动恢复");
+    }
     if minutes > 0 {
         let st = state.clone();
         glib::timeout_add_local_once(Duration::from_secs(minutes as u64 * 60), move || {
@@ -871,6 +878,7 @@ fn resume_monitoring(state: &Rc<RefCell<AppState>>) {
         s.paused_minutes = -1;
     }
     log_line(state, "恢复监控");
+    notify("已恢复监控");
     refresh_tray(state);
 }
 

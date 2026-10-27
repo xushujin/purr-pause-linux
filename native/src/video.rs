@@ -838,8 +838,7 @@ impl VideoPlayer {
         if !self.logged_fbo {
             self.logged_fbo = true;
             eprintln!(
-                "[purr-pause-linux] 渲染目标: fbo={fbo_id} internal_format={}",
-                if fbo_id == 0 { 0 } else { GL_RGBA8 }
+                "[purr-pause-linux] 渲染目标: fbo={fbo_id} internal_format={GL_RGBA8}（固定）"
             );
         }
         let mut fbo = MpvOpenglFbo {
