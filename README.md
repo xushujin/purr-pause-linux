@@ -83,11 +83,12 @@ cd native
 purr-pause-linux --test        # 立刻弹一次休息提醒，验证屏保是否正常
 purr-pause-linux --settings    # 直接打开设置窗口（不依赖托盘）
 purr-pause-linux --selftest    # 打印环境自检报告（排查「点了没反应」）
+purr-pause-linux --quit        # 让已在运行的实例退出
 purr-pause-linux --version     # 版本
 ```
 
 GNOME 默认不显示第三方托盘图标（需要 `gnome-shell-extension-appindicator`）。
-没有托盘时，用 `--settings` 打开设置、用 `--test` 验证屏保。
+没有托盘时，用 `--settings` 打开设置、用 `--test` 验证屏保、用 `--quit` 退出。
 
 ## 设置
 

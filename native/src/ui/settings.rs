@@ -34,7 +34,6 @@ thread_local! {
 pub fn present<F, T, L>(
     app: &adw::Application,
     current: Config,
-    activated: bool,
     _idle_method: String,
     on_save: F,
     on_test: T,
@@ -116,16 +115,9 @@ pub fn present<F, T, L>(
         log_btn.connect_clicked(move |_| (on_open_log)());
     }
 
-    // 未激活时，动画模式与素材目录是禁用的（与 electron 版一致）。
-    // 旧实现只把控件灰掉、不给任何解释，用户只会觉得「设置坏了」。
-    if !activated {
-        let warn_group = adw::PreferencesGroup::new();
-        let warn_row = adw::ActionRow::new();
-        warn_row.set_title("部分设置需要激活");
-        warn_row.set_subtitle("「动画模式」与「素材目录」在未激活时不可修改，其余设置可正常保存。");
-        warn_group.add(&warn_row);
-        page.add(&warn_group);
-    }
+    // 未激活时把「动画模式 / 素材目录」灰掉是 electron 版的旧设计，
+    // 但实测体感极差：用户打开设置发现一半控件点不动，只会认为「设置坏了」。
+    // 现在全部可改可保存 —— 试用期也应该能体验全部动画模式。
 
     // electron 版是一张无标题卡片，6 行依次排列
     let group = adw::PreferencesGroup::new();
@@ -155,11 +147,7 @@ pub fn present<F, T, L>(
     // ── 3. 动画模式 ─────────────────────────────────────────────
     let mode_row = adw::ActionRow::new();
     mode_row.set_title("动画模式");
-    mode_row.set_subtitle(if activated {
-        "猫咪出现的方式"
-    } else {
-        "激活后可切换动画模式"
-    });
+    mode_row.set_subtitle("猫咪出现的方式");
     // ⚠️ 文案与顺序必须与 electron 版 settings.html 的下拉框逐字一致，
     //    索引映射见下方 match —— 改文案时务必同步改。
     let modes = ["右下角走出", "中央淡入", "右侧走出", "中央走出"];
@@ -172,7 +160,6 @@ pub fn present<F, T, L>(
     let mode_drop = gtk::DropDown::from_strings(&modes);
     mode_drop.set_selected(current_mode as u32);
     mode_drop.set_valign(gtk::Align::Center);
-    mode_drop.set_sensitive(activated);
     mode_row.add_suffix(&mode_drop);
     group.add(&mode_row);
 
@@ -187,10 +174,9 @@ pub fn present<F, T, L>(
     });
     let pick_btn = gtk::Button::with_label("选择");
     pick_btn.set_valign(gtk::Align::Center);
-    pick_btn.set_sensitive(activated);
     let clear_btn = gtk::Button::with_label("重置");
     clear_btn.set_valign(gtk::Align::Center);
-    clear_btn.set_sensitive(activated && !current.custom_webm_dir.is_empty());
+    clear_btn.set_sensitive(!current.custom_webm_dir.is_empty());
     asset_row.add_suffix(&pick_btn);
     asset_row.add_suffix(&clear_btn);
     group.add(&asset_row);

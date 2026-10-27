@@ -62,6 +62,8 @@ enum RunMode {
     Settings,
     /// `--selftest`：打印环境自检后退出
     SelfTest,
+    /// `--quit`：让已在运行的实例退出（托盘菜单点不动时的备用出口）
+    Quit,
     /// `--version` / `--help`
     Version,
     Help,
@@ -74,6 +76,7 @@ fn parse_mode(args: &[String]) -> RunMode {
             "--test" | "test" => mode = RunMode::Test,
             "--settings" | "settings" => mode = RunMode::Settings,
             "--selftest" | "selftest" | "--diagnose" => mode = RunMode::SelfTest,
+            "--quit" | "-q" | "quit" => mode = RunMode::Quit,
             "--version" | "-V" => mode = RunMode::Version,
             "--help" | "-h" => mode = RunMode::Help,
             _ => {}
@@ -90,13 +93,14 @@ const HELP_TEXT: &str = "\
   purr-pause-linux --test       启动后立刻弹出一次休息提醒（验证屏保）
   purr-pause-linux --settings   启动后直接打开设置窗口
   purr-pause-linux --selftest   打印环境自检（排查「点了没反应」）
+  purr-pause-linux --quit       让已在运行的实例退出
   purr-pause-linux --version    显示版本
   purr-pause-linux --help       显示本帮助
 
 提示：
   · 托盘不可用时（GNOME 需 gnome-shell-extension-appindicator），
-    用 --settings 打开设置、用 --test 验证屏保。
-  · 覆盖层可以用 Esc / 双击画面 / 窗口关闭按钮退出。
+    用 --settings 打开设置、用 --test 验证屏保、用 --quit 退出。
+  · 覆盖层可以用 Esc / 双击画面 / 关闭按钮退出。
 ";
 
 /// 应用共享状态。
@@ -156,6 +160,28 @@ fn main() {
         //   与注释意图相反，会导致同时跑多个托盘与多套计时器。）
         .build();
 
+    // 「退出」动作：托盘菜单里点不动、或者根本没托盘时的备用出口。
+    // 注册到 Application 上之后，`--quit` 的第二个实例会被 GApplication
+    // 通过 D-Bus 把动作转发给已在运行的主实例。
+    let quit_action = gtk::gio::SimpleAction::new("quit", None);
+    {
+        let app_weak = app.downgrade();
+        quit_action.connect_activate(move |_, _| {
+            if let Some(a) = app_weak.upgrade() {
+                a.quit();
+            }
+        });
+    }
+    app.add_action(&quit_action);
+
+    if mode == RunMode::Quit {
+        // 先注册：若已有主实例，本进程会变成 remote，动作随之转发过去。
+        let _ = app.register(gtk::gio::Cancellable::NONE);
+        app.activate_action("quit", None);
+        dbg_trace("--quit：已向主实例发送退出请求");
+        return;
+    }
+
     // 注意：hold() 已移出本闭包（见下方 main 作用域），
     // 故此处参数不再使用，用 `_app` 避免 unused_variables 警告。
     // ⚠️ 初始化放在 startup（**只跑一次**），不要放回 connect_activate。
@@ -165,6 +191,9 @@ fn main() {
     // 图标就会把一切重来一遍：重复的计时器、重复的消息轮询、重复的托盘。
     app.connect_startup(move |app_ref| {
         dbg_trace("startup：开始初始化");
+        // ⚠️ mpv 要求 LC_NUMERIC 必须是 "C"，而 gtk_init() 会把它设成用户 locale。
+        //    GTK 初始化已在本回调之前完成，这里改回来 —— 否则 mpv_create 返回 NULL。
+        video::ensure_c_numeric_locale();
         // 保存 Application 句柄：设置窗口要 set_application() 才能被应用管理
         // （未关联的裸窗口不进入应用的窗口列表，再次点图标也不会被前置）。
         APP.with(|a| *a.borrow_mut() = Some(app_ref.clone()));
@@ -531,6 +560,27 @@ fn trigger_cat(state: &Rc<RefCell<AppState>>, manual: bool) {
     });
 }
 
+/// 只关闭覆盖层窗口、复位「正在显示」标志，**不清空计时**。
+///
+/// 用在「用户从托盘/启动器打开了别的窗口」时：全屏覆盖层会把新窗口压在下面，
+/// 表现为「点了菜单项，窗口开了但看不见也用不了」。
+/// 与 `dismiss_cat` 的区别：不动 active_seconds / snooze_count，也不触发
+/// `--test` 的退出逻辑。
+fn close_overlays(state: &Rc<RefCell<AppState>>) {
+    {
+        let mut s = state.borrow_mut();
+        if !s.is_overlay_showing && s.overlays.is_empty() {
+            return;
+        }
+        s.is_overlay_showing = false;
+        s.last_dismiss = Some(Instant::now());
+        for ov in s.overlays.drain(..) {
+            ov.close();
+        }
+    }
+    refresh_tray(state);
+}
+
 fn dismiss_cat(state: &Rc<RefCell<AppState>>) {
     let mut s = state.borrow_mut();
     s.is_overlay_showing = false;
@@ -795,7 +845,7 @@ fn block_on<F: std::future::Future>(fut: F) -> F::Output {
 // ---------------------------------------------------------------------------
 
 fn build_tray(state: &Rc<RefCell<AppState>>) {
-    let mut tray = match Tray::new("胖猫暂停一下 Linux", "purr-pause-linux") {
+    let tray = match Tray::new("胖猫暂停一下 Linux", "purr-pause-linux") {
         Some(t) => t,
         None => {
             log_line(state, "警告：无法创建托盘图标（缺少 libayatana-appindicator3）");
@@ -804,10 +854,10 @@ fn build_tray(state: &Rc<RefCell<AppState>>) {
         }
     };
 
-    let items = build_tray_items(state);
-    tray.set_menu(items);
     // 托盘实例必须保持存活，否则图标会从托盘消失。
     TRAY.with(|t| *t.borrow_mut() = Some(tray));
+    // 首次一定发生变化，refresh_tray 会真正下发一次菜单
+    refresh_tray(state);
 }
 
 thread_local! {
@@ -818,6 +868,8 @@ thread_local! {
     /// GtkApplication 句柄，startup 时写入。
     /// 设置窗口要 `set_application()` 才能被应用管理（窗口列表 / 前置 / 分组）。
     static APP: RefCell<Option<adw::Application>> = const { RefCell::new(None) };
+    /// 上一次下发的托盘菜单内容签名，用于去重（见 refresh_tray 的说明）。
+    static TRAY_SIG: RefCell<String> = const { RefCell::new(String::new()) };
 }
 
 fn build_tray_items(state: &Rc<RefCell<AppState>>) -> Vec<TrayItem> {
@@ -960,8 +1012,27 @@ fn build_tray_items(state: &Rc<RefCell<AppState>>) -> Vec<TrayItem> {
 }
 
 /// 刷新托盘菜单（复用已存在的托盘实例）。
+///
+/// ⚠️ 必须做「内容没变就不下发」的去重：
+/// 监控循环每 10 秒调一次本函数，而 `Tray::set_menu` 会重新分配全部条目 id、
+/// 递增 revision 并广播 `LayoutUpdated`。宿主（GNOME 扩展）收到后会重建菜单模型 ——
+/// 如果此时用户正开着菜单，菜单会被刷新掉/变得点不动，实测表现就是
+/// 「菜单能打开，但点了没反应，也退不出去」。
 fn refresh_tray(state: &Rc<RefCell<AppState>>) {
     let items = build_tray_items(state);
+    let sig = tray_signature(&items);
+    let changed = TRAY_SIG.with(|s| {
+        let mut cur = s.borrow_mut();
+        if *cur == sig {
+            false
+        } else {
+            *cur = sig;
+            true
+        }
+    });
+    if !changed {
+        return;
+    }
     TRAY.with(|t| {
         if let Some(tray) = t.borrow_mut().as_mut() {
             tray.set_menu(items);
@@ -969,11 +1040,33 @@ fn refresh_tray(state: &Rc<RefCell<AppState>>) {
     });
 }
 
+/// 菜单内容签名（标签 + 可用性 + 层级结构）。动作闭包无法比较，
+/// 但它们总是跟着内容一起重建，所以按内容判等足够。
+fn tray_signature(items: &[TrayItem]) -> String {
+    fn walk(items: &[TrayItem], out: &mut String) {
+        for it in items {
+            out.push_str(&it.label);
+            out.push(if it.sensitive { '1' } else { '0' });
+            if let Some(sub) = &it.submenu {
+                out.push('[');
+                walk(sub, out);
+                out.push(']');
+            }
+            out.push('\n');
+        }
+    }
+    let mut s = String::new();
+    walk(items, &mut s);
+    s
+}
+
 /// 打开待办消息列表窗口。
 ///
 /// 即使消息提醒未开启也照常打开 —— 列表窗口内部会显示「未启用」占位文案，
 /// 这样用户能从窗口里直接看到原因，而不是只看到一句终端输出。
 fn open_message_list(state: &Rc<RefCell<AppState>>) {
+    // 同上：先收掉全屏覆盖层，否则列表窗口会被压在下面
+    close_overlays(state);
     let snapshot = {
         let s = state.borrow();
         message::aggregate(&s.sources, s.config.message_notify_enabled)
@@ -1015,8 +1108,13 @@ fn toggle_message_notify(state: &Rc<RefCell<AppState>>) {
 fn open_log_dir(state: &Rc<RefCell<AppState>>) {
     let path = state.borrow().log.path();
     let dir = path.parent().map(|p| p.to_path_buf()).unwrap_or_default();
+    // 日志默认关闭（log_enabled=false）时目录可能根本还没建出来，
+    // 直接 xdg-open 会失败并打印「日志目录尚不存在」。先建出来。
     if !dir.exists() {
-        eprintln!("日志目录尚不存在：{}", dir.display());
+        let _ = std::fs::create_dir_all(&dir);
+    }
+    if !dir.exists() {
+        eprintln!("无法创建日志目录：{}", dir.display());
         return;
     }
     // 用系统默认文件管理器打开
@@ -1058,9 +1156,12 @@ fn resume_monitoring(state: &Rc<RefCell<AppState>>) {
 }
 
 fn open_settings(state: &Rc<RefCell<AppState>>) {
+    // 覆盖层是全屏窗口，新开的设置窗口会被它压在下面 ——
+    // 用户看到的就是「点了设置，窗口好像开了但完全没法用」。
+    close_overlays(state);
+
     let cfg = state.borrow().config.clone();
     let idle_method = idle::detection_method().to_string();
-    let activated = license::check_status().status == LicenseStatus::Active;
 
     // 设置窗口需要关联到 GtkApplication（否则不进入应用窗口列表）。
     let Some(app) = APP.with(|a| a.borrow().clone()) else {
@@ -1074,7 +1175,6 @@ fn open_settings(state: &Rc<RefCell<AppState>>) {
     ui::settings::present(
         &app,
         cfg,
-        activated,
         idle_method,
         move |new_cfg| {
             let mut s = st.borrow_mut();
@@ -1105,6 +1205,8 @@ fn open_settings(state: &Rc<RefCell<AppState>>) {
 }
 
 fn show_activation(state: &Rc<RefCell<AppState>>) {
+    // 同 open_settings：别让全屏覆盖层把激活窗口压在下面
+    close_overlays(state);
     let st = state.clone();
     ui::activation::present(move || {
         log_line(&st, "激活成功");

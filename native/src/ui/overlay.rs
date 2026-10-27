@@ -97,6 +97,13 @@ struct Ctx {
     player: Rc<RefCell<Option<VideoPlayer>>>,
     /// 累计出帧数 —— 用来判断视频是否真的在渲染。
     frames: Rc<Cell<u32>>,
+    /// 是否已经尝试过创建播放器。**只试一次**：失败后每帧重试会刷屏，
+    /// 实测每 40ms 一条 `视频初始化失败` + 两条 Gtk-CRITICAL。
+    tried: Cell<bool>,
+    /// 视频是否已判定不可用（降级为静态猫图）。
+    failed: Cell<bool>,
+    /// 上一次应用的几何 (cx, cy, w, h, opacity)，用来跳过无变化的重复布局。
+    last_geo: Cell<(f64, f64, i32, i32, f64)>,
     /// 控制条与其上的提示文字。
     bar: gtk::Box,
     countdown: gtk::Label,
@@ -210,6 +217,9 @@ impl CatOverlay {
             gl_area: gl_area.clone(),
             player: Rc::new(RefCell::new(None)),
             frames: Rc::new(Cell::new(0)),
+            tried: Cell::new(false),
+            failed: Cell::new(false),
+            last_geo: Cell::new((f64::NAN, f64::NAN, -1, -1, f64::NAN)),
             bar: bar.clone(),
             countdown: countdown.clone(),
             hint: hint.clone(),
@@ -219,15 +229,28 @@ impl CatOverlay {
         {
             let c = ctx.clone();
             gl_area.connect_render(move |area, _gl_ctx| {
+                // 已判定失败 → 不再碰 GL，避免每帧刷屏
+                if c.failed.get() {
+                    return glib::Propagation::Stop;
+                }
                 // mpv 只在「已 current」的 GL 上下文上发指令，每帧都要先 make_current
                 area.make_current();
                 if c.player.borrow().is_none() {
+                    // ⚠️ 只尝试一次。旧实现在每次 render 里重试，失败时
+                    //    每 40ms 打印一条错误（实测刷满整个终端）。
+                    if c.tried.get() {
+                        return glib::Propagation::Stop;
+                    }
+                    c.tried.set(true);
                     match VideoPlayer::new(area) {
                         Ok(p) => *c.player.borrow_mut() = Some(p),
                         Err(e) => {
                             eprintln!("[purr-pause-linux] 视频初始化失败：{e}");
-                            // 不 panic、不黑屏：报错留在屏幕上，静态猫图继续显示
-                            c.hint.set_text(&format!("视频渲染不可用，已降级为静态猫咪：{e}"));
+                            // 只置标志：界面上的降级动作交给主节拍做
+                            // （在自己的 render 回调里改可见性容易踩重入）
+                            c.failed.set(true);
+                            c.hint
+                                .set_text(&format!("视频渲染不可用，已降级为静态猫咪：{e}"));
                             c.hint.set_visible(true);
                             return glib::Propagation::Stop;
                         }
@@ -342,7 +365,6 @@ fn begin(
     let switched = Rc::new(Cell::new(false));
     let inited = Rc::new(Cell::new(false));
     let bar_shown = Rc::new(Cell::new(false));
-    let failed = Rc::new(Cell::new(false));
     let countdown_start: Rc<Cell<Option<Instant>>> = Rc::new(Cell::new(None));
     let t0 = Instant::now();
     let total_secs = break_minutes.max(1) as u64 * 60;
@@ -376,7 +398,7 @@ fn begin(
                         eprintln!("[purr-pause-linux] 走路素材加载失败：{e}");
                         ctx.hint.set_text(&format!("走路素材加载失败：{e}"));
                         ctx.hint.set_visible(true);
-                        failed.set(true);
+                        ctx.failed.set(true);
                         // 素材读不出来 → 立刻降级成静态猫图，别留一个空窗口
                         ctx.gl_area.set_visible(false);
                         ctx.fallback.set_visible(true);
@@ -410,7 +432,7 @@ fn begin(
         }
 
         // 视频真的出帧了就不需要静态图（正常情况下它一直是隐藏的）
-        if ctx.frames.get() > 0 && ctx.fallback.is_visible() && !failed.get() {
+        if ctx.frames.get() > 0 && ctx.fallback.is_visible() && !ctx.failed.get() {
             ctx.fallback.set_visible(false);
         }
 
@@ -435,9 +457,15 @@ fn begin(
             }
         }
 
-        // 6) 视频始终没出帧 → 判定失败，隐藏 GL 层，露出静态猫图
-        if !failed.get() && t >= VIDEO_DEADLINE_MS && ctx.frames.get() == 0 {
-            failed.set(true);
+        // 6) 视频不可用 → 隐藏 GL 层，露出静态猫图
+        //
+        //    两个触发源：
+        //      a) render 回调里 mpv 初始化失败（立刻，会带上具体原因）；
+        //      b) 3 秒内一帧都没出（兜底，覆盖「GL 上下文根本没建起来」）。
+        if !ctx.failed.get() && t >= VIDEO_DEADLINE_MS && ctx.frames.get() == 0 {
+            ctx.failed.set(true);
+        }
+        if ctx.failed.get() && !ctx.fallback.is_visible() {
             ctx.gl_area.set_visible(false);
             ctx.fallback.set_visible(true);
             *ctx.aspect.borrow_mut() = 1.0; // 静态猫图是方图
@@ -551,14 +579,30 @@ fn apply_geometry(ctx: &Ctx) {
     let cx = (x - w as f64 / 2.0).max(0.0);
     let cy = (y - h as f64 / 2.0).max(0.0);
 
+    // 动画结束后几何不再变化，跳过重复布局（set_size_request 会触发整窗 relayout）
+    let prev = ctx.last_geo.get();
+    if (prev.0 - cx).abs() < 0.5
+        && (prev.1 - cy).abs() < 0.5
+        && prev.2 == w
+        && prev.3 == h
+        && (prev.4 - opacity).abs() < 0.001
+    {
+        return;
+    }
+    ctx.last_geo.set((cx, cy, w, h, opacity));
+
     ctx.fallback.set_size_request(w, h);
     ctx.fallback.set_opacity(opacity);
-    ctx.frame.put(&ctx.fallback, cx, cy);
+    // ⚠️ 用 move_（gtk_fixed_move），**不能用 put**：
+    //    gtk_fixed_put 断言子控件必须没有 parent（`_gtk_widget_get_parent (widget) == NULL`），
+    //    对已添加的子控件再调 put 会失败（每帧一条 Gtk-CRITICAL）且位置根本不动。
+    //    v1.0.1 实测：猫被钉在左上角、尺寸也不更新，就是因为这里用了 put。
+    ctx.frame.move_(&ctx.fallback, cx, cy);
 
     if ctx.gl_area.is_visible() {
         ctx.gl_area.set_size_request(w, h);
         ctx.gl_area.set_opacity(opacity);
-        ctx.frame.put(&ctx.gl_area, cx, cy);
+        ctx.frame.move_(&ctx.gl_area, cx, cy);
     }
 }
 

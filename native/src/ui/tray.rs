@@ -457,6 +457,14 @@ fn menu_method(
             let id = params.child_value(0).get::<i32>().unwrap_or(-1);
             let event = params.child_value(1).str().unwrap_or("").to_string();
             let action = sh.borrow().items.get(&id).and_then(|n| n.action.clone());
+            // 排查用：PURR_DEBUG=1 时把每次菜单点击打出来，
+            // 用来区分「宿主没把点击发过来」和「发了但动作没执行」。
+            if std::env::var_os("PURR_DEBUG").is_some() {
+                eprintln!(
+                    "[purr-pause-linux] 托盘 Event: id={id} event={event} 有动作={}",
+                    action.is_some()
+                );
+            }
             // 先应答再执行动作：动作里可能开窗口（重入主循环）
             invocation.return_value(Some(&no_reply()));
             if event == "clicked" {

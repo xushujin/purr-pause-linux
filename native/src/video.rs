@@ -218,6 +218,33 @@ fn mpv_api() -> Result<&'static MpvApi, String> {
     MPV_API.get_or_init(load_mpv_api).clone()
 }
 
+/// `mpv_create` 之前必须满足的全局前提：**进程的 LC_NUMERIC 必须是 "C"**。
+///
+/// 这是 mpv 的硬性要求（它内部用 `strtod` 解析时间/倍速等参数）。不满足时
+/// `mpv_create()` 直接返回 **NULL**，只在 stderr 打印：
+/// ```text
+/// Non-C locale detected. This is not supported.
+/// Call 'setlocale(LC_NUMERIC, "C");' in your code.
+/// ```
+/// 而 GTK 的 `gtk_init()` 会执行 `setlocale(LC_ALL, "")`，把 LC_NUMERIC
+/// 设成用户的 locale（zh_CN.UTF-8 之类）—— 所以必须在 GTK 初始化**之后**
+/// 再改回 "C"，否则视频永远起不来（v1.0.1 实测就死在这里）。
+///
+/// glibc 的 locale 分类常量：LC_CTYPE=0、LC_NUMERIC=1、LC_TIME=2 …
+const LC_NUMERIC: c_int = 1;
+
+unsafe extern "C" {
+    fn setlocale(category: c_int, locale: *const c_char) -> *mut c_char;
+}
+
+/// 把 LC_NUMERIC 设为 "C"。幂等、开销极低，可以放心重复调用。
+pub fn ensure_c_numeric_locale() {
+    unsafe {
+        // 用字节串而不是 c"..." 字面量，避免对工具链版本的要求
+        setlocale(LC_NUMERIC, b"C\0".as_ptr() as *const c_char);
+    }
+}
+
 /// 自检用：只做「能不能 dlopen 并解析全部符号」的探测，不创建播放器。
 ///
 /// 返回实际加载到的库名；失败时返回可读原因。
@@ -425,6 +452,10 @@ impl VideoPlayer {
     /// 必须在 GL 上下文**已经建立且 current** 之后调用
     /// （即 GLArea 的 `render` 回调内），否则 render context 创建会失败。
     pub fn new(gl_area: &gtk::GLArea) -> Result<Self, String> {
+        // ⚠️ 必须在 mpv_create 之前把 LC_NUMERIC 设回 "C"，
+        //    否则 mpv_create 返回 NULL（详见 ensure_c_numeric_locale 的注释）。
+        ensure_c_numeric_locale();
+
         let api = mpv_api()?;
         // 加载 GL 相关动态库；句柄随进程存活，作为 get_proc_address 的 ctx
         let gl_ctx = gl_libs()? as *const GlLibraries as *mut c_void;
