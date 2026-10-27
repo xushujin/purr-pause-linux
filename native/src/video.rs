@@ -392,17 +392,78 @@ unsafe extern "C" fn get_proc_address(ctx: *mut c_void, name: *const c_char) -> 
 /// `glGetIntegerv(GL_FRAMEBUFFER_BINDING, &fbo)` 取当前 FBO），
 /// 因此不能硬编码 FBO 0，否则画面会画到错误的缓冲上。
 fn current_fbo() -> c_int {
-    let Ok(libs) = gl_libs() else {
+    let Some(p) = gl_proc(b"glGetIntegerv\0") else {
         return 0;
     };
-    for lib in [&libs.gl, &libs.gles].into_iter().flatten() {
-        if let Ok(f) = unsafe { lib.get::<GlGetIntegerv>(b"glGetIntegerv\0") } {
-            let mut fbo: c_int = 0;
-            unsafe { f(GL_FRAMEBUFFER_BINDING, &mut fbo) };
-            return fbo;
+    let f: GlGetIntegerv = unsafe { std::mem::transmute(p) };
+    let mut fbo: c_int = 0;
+    unsafe { f(GL_FRAMEBUFFER_BINDING, &mut fbo) };
+    fbo
+}
+
+/// 按当前会话选出的 GL 入口解析顺序。
+///
+/// ⚠️ 这是 v1.4.0「黑底」的根因：之前 `current_fbo()` / `clear_transparent()`
+/// 直接 dlsym libGL 拿 `glGetIntegerv` / `glClear`，而 GTK 在 Wayland（以及
+/// 现代 X11）上用的是 **EGL 上下文**。libGL 的入口按它自己的 TLS 当前上下文
+/// 分发，对 EGL 上下文取不到 → `GL_FRAMEBUFFER_BINDING` 读回 **0**。
+/// 于是我们告诉 mpv「渲染到默认帧缓冲」，mpv 就不再认为目标 FBO 带 alpha，
+/// 透明像素被混合成黑色。
+///
+/// 实测日志：`视频参数: … fbo=0` —— 一眼就能看出是这里。
+fn prefer_egl() -> bool {
+    std::env::var_os("WAYLAND_DISPLAY").is_some()
+        || std::env::var("XDG_SESSION_TYPE")
+            .map(|v| v.eq_ignore_ascii_case("wayland"))
+            .unwrap_or(false)
+}
+
+/// 解析一个 GL 入口地址（走上下文所属 API 的 getProcAddress，最后才 dlsym）。
+fn gl_proc(name: &[u8]) -> Option<*mut c_void> {
+    let libs = gl_libs().ok()?;
+    let cname = name.as_ptr() as *const c_char;
+
+    unsafe {
+        let try_egl = || -> Option<*mut c_void> {
+            let egl = libs.egl.as_ref()?;
+            let f = egl.get::<GetProcAddressFn>(b"eglGetProcAddress\0").ok()?;
+            let p = f(cname);
+            (!p.is_null()).then_some(p)
+        };
+        let try_glx = || -> Option<*mut c_void> {
+            let gl = libs.gl.as_ref()?;
+            let f = gl.get::<GetProcAddressFn>(b"glXGetProcAddressARB\0").ok()?;
+            let p = f(cname);
+            (!p.is_null()).then_some(p)
+        };
+
+        // Wayland 优先 EGL，X11 优先 GLX；两条都试一遍再退回 dlsym。
+        if prefer_egl() {
+            if let Some(p) = try_egl() {
+                return Some(p);
+            }
+            if let Some(p) = try_glx() {
+                return Some(p);
+            }
+        } else {
+            if let Some(p) = try_glx() {
+                return Some(p);
+            }
+            if let Some(p) = try_egl() {
+                return Some(p);
+            }
+        }
+
+        // 兜底：核心入口可能被直接导出
+        for lib in [&libs.gl, &libs.gles].into_iter().flatten() {
+            if let Ok(sym) = lib.get::<*mut c_void>(name) {
+                if !(*sym).is_null() {
+                    return Some(*sym);
+                }
+            }
         }
     }
-    0
+    None
 }
 
 /// 把当前 FBO 清成透明黑 (0,0,0,0)。
@@ -410,20 +471,17 @@ fn current_fbo() -> c_int {
 /// mpv 渲染只覆盖视频区域，FBO 其余部分保留上一次的内容；
 /// 必须显式清成透明，空隙处透出的才是桌面而非黑块。
 fn clear_transparent() {
-    let Ok(libs) = gl_libs() else {
+    let (Some(p_color), Some(p_clear)) = (
+        gl_proc(b"glClearColor\0"),
+        gl_proc(b"glClear\0"),
+    ) else {
         return;
     };
-    for lib in [&libs.gl, &libs.gles].into_iter().flatten() {
-        if let (Ok(clear_color), Ok(clear)) = (
-            unsafe { lib.get::<GlClearColor>(b"glClearColor\0") },
-            unsafe { lib.get::<GlClear>(b"glClear\0") },
-        ) {
-            unsafe {
-                clear_color(0.0, 0.0, 0.0, 0.0);
-                clear(GL_COLOR_BUFFER_BIT);
-            }
-            return;
-        }
+    let clear_color: GlClearColor = unsafe { std::mem::transmute(p_color) };
+    let clear: GlClear = unsafe { std::mem::transmute(p_clear) };
+    unsafe {
+        clear_color(0.0, 0.0, 0.0, 0.0);
+        clear(GL_COLOR_BUFFER_BIT);
     }
 }
 
@@ -661,6 +719,11 @@ impl VideoPlayer {
         eprintln!(
             "[purr-pause-linux] 视频参数: pixelformat={fmt} 源alpha={src_alpha} alpha选项={alpha_opt} hwdec={hwdec} fbo={fbo}"
         );
+        if fbo == 0 {
+            eprintln!(
+                "[purr-pause-linux] ⚠️ 读不到 GL 帧缓冲（fbo=0），mpv 会把透明像素混成黑底"
+            );
+        }
     }
 
     /// 读取 int64 型属性。

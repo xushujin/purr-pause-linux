@@ -109,6 +109,8 @@ pub struct AppState {
     snooze_count: i64,
     snooze_threshold: i64,
     is_paused: bool,
+    /// 暂停时长（分钟）；0 = 直到手动恢复；未暂停时为 -1
+    paused_minutes: i64,
     is_overlay_showing: bool,
     last_dismiss: Option<Instant>,
     overlays: Vec<CatOverlay>,
@@ -226,6 +228,7 @@ fn main() {
             snooze_count: 0,
             snooze_threshold: 0,
             is_paused: false,
+            paused_minutes: -1,
             is_overlay_showing: false,
             last_dismiss: None,
             overlays: Vec::new(),
@@ -662,6 +665,7 @@ fn build_tray_items(state: &Rc<RefCell<AppState>>) -> Vec<TrayItem> {
     let mut items = vec![TrayItem {
         label: remaining,
         sensitive: false,
+        checked: None,
         submenu: None,
         action: None,
     }];
@@ -670,33 +674,42 @@ fn build_tray_items(state: &Rc<RefCell<AppState>>) -> Vec<TrayItem> {
     items.push(TrayItem {
         label: "---".to_string(),
         sensitive: false,
+        checked: None,
         submenu: None,
         action: None,
     });
 
     // 暂停 / 恢复
+    //
+    // ⚠️ 两个坑：
+    //   1. 不要用 submenu —— GNOME 的 appindicator 扩展对二级菜单支持不稳定，
+    //      实测「暂停监控」点了完全没反应（子菜单根本不弹）。四个选项平铺。
+    //   2. 平铺后要能看出「当前选的是哪个」—— 用 dbusmenu 的 radio 勾选态
+    //      （toggle-type + toggle-state），否则点了之后菜单里毫无反馈。
     if s.is_paused {
         let st = state.clone();
         items.push(TrayItem {
             label: "恢复监控".to_string(),
             sensitive: true,
             submenu: None,
+            checked: None,
             action: Some(Box::new(move || resume_monitoring(&st))),
         });
-    } else {
-        // ⚠️ 不要用 submenu：GNOME 的 appindicator 扩展对二级菜单支持不稳定，
-        //    实测「暂停监控」点了完全没反应（子菜单根本不弹）。
-        //    这里把四个选项直接平铺到一级菜单，保证点了就生效。
-        items.push(pause_item(state, "暂停 30 分钟", 30));
-        items.push(pause_item(state, "暂停 1 小时", 60));
-        items.push(pause_item(state, "暂停 2 小时", 120));
-        items.push(pause_item(state, "暂停到手动恢复", 0));
+    }
+    {
+        let paused = s.is_paused;
+        let pm = s.paused_minutes;
+        items.push(pause_item(state, "暂停 30 分钟", 30, paused && pm == 30));
+        items.push(pause_item(state, "暂停 1 小时", 60, paused && pm == 60));
+        items.push(pause_item(state, "暂停 2 小时", 120, paused && pm == 120));
+        items.push(pause_item(state, "暂停到手动恢复", 0, paused && pm == 0));
     }
 
     let st_settings = state.clone();
     items.push(TrayItem {
         label: "设置".to_string(),
         sensitive: true,
+        checked: None,
         submenu: None,
         action: Some(Box::new(move || open_settings(&st_settings))),
     });
@@ -705,6 +718,7 @@ fn build_tray_items(state: &Rc<RefCell<AppState>>) -> Vec<TrayItem> {
     items.push(TrayItem {
         label: "查看日志".to_string(),
         sensitive: true,
+        checked: None,
         submenu: None,
         action: Some(Box::new(move || open_log_dir(&st_log))),
     });
@@ -713,18 +727,21 @@ fn build_tray_items(state: &Rc<RefCell<AppState>>) -> Vec<TrayItem> {
     items.push(TrayItem {
         label: "立即测试".to_string(),
         sensitive: true,
+        checked: None,
         submenu: None,
         action: Some(Box::new(move || trigger_cat(&st_test, true))),
     });
     items.push(TrayItem {
         label: format!("v{}", env!("CARGO_PKG_VERSION")),
         sensitive: false,
+        checked: None,
         submenu: None,
         action: None,
     });
     items.push(TrayItem {
         label: "退出".to_string(),
         sensitive: true,
+        checked: None,
         submenu: None,
         action: Some(Box::new(|| {
             std::process::exit(0);
@@ -800,12 +817,18 @@ fn open_log_dir(state: &Rc<RefCell<AppState>>) {
     let _ = std::process::Command::new("xdg-open").arg(&dir).spawn();
 }
 
-fn pause_item(state: &Rc<RefCell<AppState>>, label: &str, minutes: i64) -> TrayItem {
+fn pause_item(
+    state: &Rc<RefCell<AppState>>,
+    label: &str,
+    minutes: i64,
+    checked: bool,
+) -> TrayItem {
     let st = state.clone();
     TrayItem {
         label: label.to_string(),
         sensitive: true,
         submenu: None,
+        checked: Some(checked),
         action: Some(Box::new(move || pause_for(&st, minutes))),
     }
 }
@@ -814,6 +837,7 @@ fn pause_for(state: &Rc<RefCell<AppState>>, minutes: i64) {
     {
         let mut s = state.borrow_mut();
         s.is_paused = true;
+        s.paused_minutes = minutes;
     }
     log_line(state, &format!("暂停监控 {minutes} 分钟"));
     if minutes > 0 {
@@ -829,6 +853,7 @@ fn resume_monitoring(state: &Rc<RefCell<AppState>>) {
     {
         let mut s = state.borrow_mut();
         s.is_paused = false;
+        s.paused_minutes = -1;
     }
     log_line(state, "恢复监控");
     refresh_tray(state);

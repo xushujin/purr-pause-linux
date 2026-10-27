@@ -489,8 +489,8 @@ fn begin(
             }
         }
 
-        // 首帧到达后打一行诊断（用来区分「抠像没生效」和「mpv 把透明混成黑底」）
-        if ctx.frames.get() > 0 && !dumped.get() {
+        // 起播 2 秒后打一行诊断（太早查 video-params 会是空的）
+        if t >= 2000.0 && !dumped.get() {
             dumped.set(true);
             if let Some(p) = ctx.player.borrow().as_ref() {
                 p.debug_dump();

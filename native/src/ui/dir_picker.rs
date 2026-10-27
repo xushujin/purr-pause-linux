@@ -3,25 +3,29 @@
 //! ## 为什么不用 GTK 自带的
 //!
 //! 用户实测（Ubuntu + GNOME）：点「浏览」报 **「无法显示文件夹内容」**，
-//! 并且终端里伴随两条
-//! ```text
-//! Gtk-Message: GtkDialog mapped without a transient parent. This is discouraged.
-//! Cannot load libcuda.so.1
-//! ```
-//! `GtkFileChooserNative` 在没有 xdg-desktop-portal / gvfs 的环境里会退回到
+//! 终端里伴随 `GtkDialog mapped without a transient parent`。
+//! `GtkFileChooserNative` 在没有 xdg-desktop-portal / gvfs 的环境里会退回
 //! GTK 内置对话框，而内置对话框依赖 GIO 的虚拟文件系统去列目录 ——
-//! 那条链路一断就什么也列不出来，属于环境问题，改参数救不回来。
+//! 那条链路一断就什么也列不出来。属于环境问题，改参数救不回来。
 //!
-//! 所以这里只做**目录**选择这一件事：`std::fs::read_dir` 逐级进入，
-//! 不碰 GIO、不碰 portal、不碰缩略图，任何桌面环境下都能用。
+//! ## 为什么用普通 GtkWindow + 底部按钮，而不是 AdwWindow + HeaderBar
+//!
+//! v1.4.0 第一版用了 `adw::Window` + 自绘 `HeaderBar`，用户反馈
+//! **「窗口弹出来了但关不掉」**。为了不再依赖自绘标题栏里的按钮，
+//! 这里改用普通 `gtk::Window`：**窗口管理器会自带标题栏和关闭按钮**，
+//! 用户永远有一个系统级的「×」可以关掉它；底部再放一组按钮兜底。
+//!
+//! 列表只做「目录」：`std::fs::read_dir` 逐级进入，不碰 GIO / portal / 缩略图。
 
 use adw::prelude::*;
+use gtk::glib;
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 
 thread_local! {
-    /// 当前打开的目录选择窗口（强引用持有 + 单例，理由同 settings.rs）。
-    static OPEN: RefCell<Option<adw::Window>> = const { RefCell::new(None) };
+    /// 当前打开的目录选择窗口（强引用持有 + 单例）。
+    static OPEN: RefCell<Option<gtk::Window>> = const { RefCell::new(None) };
 }
 
 /// 弹出目录选择器。用户确认时回调 `on_pick(选中的目录)`。
@@ -40,23 +44,17 @@ where
         .or_else(dirs::home_dir)
         .unwrap_or_else(|| PathBuf::from("/"));
 
-    let window = adw::Window::builder()
+    // 普通 GtkWindow：交给窗口管理器画标题栏（含关闭按钮）。
+    let window = gtk::Window::builder()
         .title("选择素材目录")
+        .transient_for(parent)
         .modal(true)
         .resizable(true)
         .default_width(520)
-        .default_height(420)
+        .default_height(440)
         .build();
-    window.set_transient_for(Some(parent));
 
-    let header = adw::HeaderBar::new();
-    let cancel_btn = gtk::Button::with_label("取消");
-    let ok_btn = gtk::Button::with_label("选择此目录");
-    ok_btn.add_css_class("suggested-action");
-    header.pack_start(&cancel_btn);
-    header.pack_end(&ok_btn);
-
-    // 当前目录显示 + 上级按钮
+    // 当前目录 + 上级 / 主目录
     let path_label = gtk::Label::new(None);
     path_label.set_xalign(0.0);
     path_label.set_ellipsize(gtk::pango::EllipsizeMode::Start);
@@ -81,37 +79,42 @@ where
     let list = gtk::ListBox::new();
     list.set_selection_mode(gtk::SelectionMode::None);
     list.add_css_class("boxed-list");
-    list.set_margin_start(12);
-    list.set_margin_end(12);
-    list.set_margin_bottom(12);
 
     let scrolled = gtk::ScrolledWindow::new();
     scrolled.set_child(Some(&list));
     scrolled.set_vexpand(true);
+    scrolled.set_margin_start(12);
+    scrolled.set_margin_end(12);
+
+    // 底部按钮
+    let cancel_btn = gtk::Button::with_label("取消");
+    let ok_btn = gtk::Button::with_label("选择此目录");
+    ok_btn.add_css_class("suggested-action");
+    let bottom = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+    bottom.set_halign(gtk::Align::End);
+    bottom.set_margin_start(12);
+    bottom.set_margin_end(12);
+    bottom.set_margin_top(10);
+    bottom.set_margin_bottom(12);
+    bottom.append(&cancel_btn);
+    bottom.append(&ok_btn);
 
     let content = gtk::Box::new(gtk::Orientation::Vertical, 0);
     content.append(&top);
     content.append(&scrolled);
+    content.append(&bottom);
+    window.set_child(Some(&content));
 
-    let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    root.append(&header);
-    root.append(&content);
-    window.set_content(Some(&root));
-
-    // 当前选中的目录
-    let current: std::rc::Rc<RefCell<PathBuf>> = std::rc::Rc::new(RefCell::new(start_dir));
-
-    // 首次填充
+    let current: Rc<RefCell<PathBuf>> = Rc::new(RefCell::new(start_dir));
     refill(&list, &path_label, &current);
 
-    // 上级 / 主目录 / 取消 / 确定
+    // 上级 / 主目录
     {
         let cur = current.clone();
         let list2 = list.clone();
         let label2 = path_label.clone();
         up_btn.connect_clicked(move |_| {
-            let parent_dir = cur.borrow().parent().map(|p| p.to_path_buf());
-            if let Some(p) = parent_dir {
+            if let Some(p) = cur.borrow().parent().map(|p| p.to_path_buf()) {
                 *cur.borrow_mut() = p;
                 refill(&list2, &label2, &cur);
             }
@@ -129,17 +132,21 @@ where
         });
     }
 
-    let win_cancel = window.clone();
-    cancel_btn.connect_clicked(move |_| win_cancel.close());
+    // 取消：close() 之后再加一道 destroy 兜底。
+    // 上一版出现过「窗口关不掉」，这里不赌 close_request 一定生效。
+    {
+        let win = window.clone();
+        cancel_btn.connect_clicked(move |_| close_now(&win));
+    }
 
-    let on_pick = std::rc::Rc::new(on_pick);
+    let on_pick = Rc::new(on_pick);
     {
         let cur = current.clone();
         let win = window.clone();
         ok_btn.connect_clicked(move |_| {
             let chosen = cur.borrow().clone();
             (on_pick)(chosen);
-            win.close();
+            close_now(&win);
         });
     }
 
@@ -151,14 +158,19 @@ where
     window.present();
 }
 
+/// 关窗：先 close()，150ms 后若还可见就强制 destroy()。
+fn close_now(win: &gtk::Window) {
+    win.close();
+    let w = win.clone();
+    glib::timeout_add_local_once(std::time::Duration::from_millis(150), move || {
+        if w.is_visible() {
+            w.destroy();
+        }
+    });
+}
+
 /// 重建列表内容（进入子目录 / 返回上级都走这里）。
-///
-/// 单独抽成函数是为了避免「闭包需要调用自身」的 Rc 自引用问题。
-fn refill(
-    list: &gtk::ListBox,
-    path_label: &gtk::Label,
-    current: &std::rc::Rc<RefCell<PathBuf>>,
-) {
+fn refill(list: &gtk::ListBox, path_label: &gtk::Label, current: &Rc<RefCell<PathBuf>>) {
     let dir = current.borrow().clone();
     path_label.set_text(&dir.display().to_string());
 
@@ -181,6 +193,7 @@ fn refill(
         .filter_map(|e| e.ok())
         .map(|e| e.path())
         .filter(|p| p.is_dir())
+        // 隐藏目录（.config 之类）不显示，减少噪音
         .filter(|p| {
             p.file_name()
                 .and_then(|n| n.to_str())
@@ -193,7 +206,7 @@ fn refill(
     if dirs.is_empty() {
         let row = adw::ActionRow::new();
         row.set_title("（没有子目录）");
-        row.set_subtitle("可以直接点右上角「选择此目录」");
+        row.set_subtitle("可以直接点右下角「选择此目录」");
         list.append(&row);
         return;
     }
@@ -213,8 +226,14 @@ fn refill(
         let list2 = list.clone();
         let label2 = path_label.clone();
         row.connect_activated(move |_| {
-            *cur2.borrow_mut() = d.clone();
-            refill(&list2, &label2, &cur2);
+            let target = d.clone();
+            *cur2.borrow_mut() = target;
+            // ⚠️ 延后一拍再重建：这一行马上要被 remove 掉，
+            //    在它自己的 activated 回调里直接删自己容易踩 GTK 重入。
+            let list3 = list2.clone();
+            let label3 = label2.clone();
+            let cur3 = cur2.clone();
+            glib::idle_add_local_once(move || refill(&list3, &label3, &cur3));
         });
         list.append(&row);
     }
