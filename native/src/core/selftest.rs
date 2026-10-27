@@ -14,7 +14,6 @@ use gtk::glib;
 use gtk::prelude::*;
 
 use crate::core::{config, idle};
-use crate::license::{self, LicenseStatus};
 use crate::video;
 
 fn kv(key: &str, value: &str) {
@@ -159,7 +158,7 @@ pub fn run() -> i32 {
         None => kv("锁屏状态", "不可检测（非 GNOME 桌面，属正常）"),
     }
 
-    println!("\n[8/8] 托盘与授权");
+    println!("\n[8/8] 托盘");
     match tray_watcher_available() {
         Some(true) => ok("托盘宿主", "org.kde.StatusNotifierWatcher 在线"),
         Some(false) => bad(
@@ -168,14 +167,6 @@ pub fn run() -> i32 {
         ),
         None => bad("托盘宿主", "连不上 session D-Bus"),
     }
-    let st = license::check_status();
-    let label = match st.status {
-        LicenseStatus::Active if st.is_permanent => "已激活（永久）".to_string(),
-        LicenseStatus::Active => format!("已激活（剩余 {} 天）", st.days_left),
-        LicenseStatus::Trial => format!("试用中（剩余 {} 天）", st.days_left),
-        LicenseStatus::Expired => "未激活".to_string(),
-    };
-    kv("授权", &label);
 
     println!("\n==================================================");
     println!("自检结束。把以上输出整段复制给开发者即可定位问题。");

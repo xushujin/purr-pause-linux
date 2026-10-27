@@ -164,6 +164,12 @@ pub fn present<F, T, L>(
     group.add(&mode_row);
 
     // ── 4. 素材目录 ─────────────────────────────────────────────
+    //
+    // ⚠️ 这里必须给一个**可直接编辑的输入框**。
+    // 原生文件选择器在缺 xdg-desktop-portal / gvfs 的桌面上会直接报
+    // 「无法显示文件夹内容」（还会伴随 GtkDialog mapped without a
+    // transient parent 警告），用户根本选不了目录。
+    // 输入框永远可用，选择器退化成辅助手段。
     let asset_row = adw::ActionRow::new();
     asset_row.set_title("素材目录");
     // ActionRow::set_subtitle 收 &str（不是 Option<&str>、也不是 String）
@@ -172,11 +178,20 @@ pub fn present<F, T, L>(
     } else {
         &current.custom_webm_dir
     });
-    let pick_btn = gtk::Button::with_label("选择");
+
+    let path_entry = gtk::Entry::new();
+    path_entry.set_text(&current.custom_webm_dir);
+    path_entry.set_placeholder_text(Some("留空 = 使用默认目录"));
+    path_entry.set_width_chars(20);
+    path_entry.set_valign(gtk::Align::Center);
+    path_entry.set_tooltip_text(Some("可以直接把路径粘贴到这里"));
+
+    let pick_btn = gtk::Button::with_label("浏览");
     pick_btn.set_valign(gtk::Align::Center);
     let clear_btn = gtk::Button::with_label("重置");
     clear_btn.set_valign(gtk::Align::Center);
     clear_btn.set_sensitive(!current.custom_webm_dir.is_empty());
+    asset_row.add_suffix(&path_entry);
     asset_row.add_suffix(&pick_btn);
     asset_row.add_suffix(&clear_btn);
     group.add(&asset_row);
@@ -187,50 +202,62 @@ pub fn present<F, T, L>(
     let dir_holder: Rc<RefCell<PathBuf>> = Rc::new(RefCell::new(PathBuf::from(
         &current.custom_webm_dir,
     )));
-    let subtitle_widget = asset_row.clone();
-    let subtitle_for_clear = asset_row.clone();
-    let pick2 = pick_btn.clone();
-    // dir_holder 会被下面的 move 闭包整体捕获，故为「重置」与「保存」各留一份克隆
-    let dir_holder_clear = dir_holder.clone();
     let dir_holder_save = dir_holder.clone();
-    pick_btn.connect_clicked(move |_| {
-        let win = pick2.root().and_then(|r| r.downcast::<gtk::Window>().ok());
-        // 用原生目录选择器。
-        // ⚠️ 不能用 gtk::FileDialog —— 它是 GTK 4.10 才新增的，
-        // 而本应用最低要支持 GTK 4.6（Ubuntu 22.04），那里只有
-        // FileChooserNative（4.0 起即有，API 语义等价）。
-        let dlg = gtk::FileChooserNative::new(
-            Some("选择素材目录"),
-            win.as_ref(),
-            gtk::FileChooserAction::SelectFolder,
-            Some("选择"),
-            Some("取消"),
-        );
+
+    // 输入框是唯一的数据源：改它 → 同步 holder、副标题、重置按钮状态
+    {
         let h = dir_holder.clone();
-        let sub = subtitle_widget.clone();
-        // NativeDialog 的响应是信号式（gtk4-rs 里没有同步的 run()）。
-        // 回调参数 `dlg` 即 FileChooserNative 本身，它实现了 FileChooser 接口。
-        dlg.connect_response(move |dlg, resp| {
-            if resp == gtk::ResponseType::Accept {
-                if let Some(f) = dlg.file() {
-                    if let Some(path) = f.path() {
-                        *h.borrow_mut() = path.clone();
-                        sub.set_subtitle(&path.to_string_lossy());
+        let sub = asset_row.clone();
+        let clear = clear_btn.clone();
+        path_entry.connect_changed(move |e| {
+            let text = e.text().to_string();
+            *h.borrow_mut() = PathBuf::from(&text);
+            clear.set_sensitive(!text.trim().is_empty());
+            if text.trim().is_empty() {
+                sub.set_subtitle("使用默认目录");
+            } else {
+                sub.set_subtitle(&text);
+            }
+        });
+    }
+
+    // 浏览：原生目录选择器（仅辅助）。
+    // ⚠️ transient parent 直接传窗口本体 —— 之前用 `pick_btn.root()` 推断，
+    //    拿不到就变成无父窗口的对话框（GtkDialog mapped without a transient parent）。
+    {
+        let win = window.clone();
+        let entry = path_entry.clone();
+        pick_btn.connect_clicked(move |_| {
+            // ⚠️ 不能用 gtk::FileDialog —— 它是 GTK 4.10 才新增的，
+            // 而本应用最低要支持 GTK 4.6（Ubuntu 22.04），那里只有
+            // FileChooserNative（4.0 起即有，API 语义等价）。
+            let dlg = gtk::FileChooserNative::new(
+                Some("选择素材目录"),
+                Some(&win),
+                gtk::FileChooserAction::SelectFolder,
+                Some("选择"),
+                Some("取消"),
+            );
+            let e = entry.clone();
+            // NativeDialog 的响应是信号式（gtk4-rs 里没有同步的 run()）。
+            dlg.connect_response(move |dlg, resp| {
+                if resp == gtk::ResponseType::Accept {
+                    if let Some(path) = dlg.file().and_then(|f| f.path()) {
+                        // 写进输入框即可，holder / 副标题由 connect_changed 联动
+                        e.set_text(&path.to_string_lossy());
                     }
                 }
-            }
-            dlg.hide();
+                dlg.hide();
+            });
+            dlg.show();
         });
-        dlg.show();
-    });
-    let clear2 = clear_btn.clone();
-    let dh2 = dir_holder_clear;
-    clear_btn.connect_clicked(move |_| {
-        dh2.borrow_mut().clear();
-        clear2.set_sensitive(false);
-        // 副标题也要跟着回到默认文案，否则界面上还显示着已清除的旧路径
-        subtitle_for_clear.set_subtitle("使用默认目录");
-    });
+    }
+
+    // 重置：清空输入框（同上，联动由 connect_changed 负责）
+    {
+        let e = path_entry.clone();
+        clear_btn.connect_clicked(move |_| e.set_text(""));
+    }
 
     // ── 5. 开机自动启动 ─────────────────────────────────────────
     let autostart_row = adw::ActionRow::new();

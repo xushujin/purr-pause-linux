@@ -48,8 +48,14 @@ const WALK_FALLBACK_MS: f64 = 5200.0;
 const BAR_DEADLINE_MS: f64 = 1200.0;
 /// 视频多久没出帧就判定失败，降级为静态猫图。
 const VIDEO_DEADLINE_MS: f64 = 3000.0;
-/// 主循环节拍。
-const TICK_MS: u64 = 40;
+/// 主循环节拍（几何 / 倒计时 / 事件泵）。
+///
+/// 必须是「帧级」的：这个节拍同时驱动猫咪的位移与缩放动画，
+/// 之前写 40ms（=25fps）时走路明显一顿一顿的。
+const TICK_MS: u64 = 16;
+/// 渲染泵节拍。独立于逻辑节拍，只负责「mpv 有新帧就 queue_render」，
+/// 这样播放帧率不受逻辑节拍限制。
+const RENDER_PUMP_MS: u64 = 8;
 
 pub enum OverlayEvent {
     Dismissed,
@@ -104,6 +110,8 @@ struct Ctx {
     failed: Cell<bool>,
     /// 上一次应用的几何 (cx, cy, w, h, opacity)，用来跳过无变化的重复布局。
     last_geo: Cell<(f64, f64, i32, i32, f64)>,
+    /// 覆盖层是否还活着。窗口关闭后两个定时器都要停，否则会一直持有 Ctx。
+    alive: Cell<bool>,
     /// 控制条与其上的提示文字。
     bar: gtk::Box,
     countdown: gtk::Label,
@@ -113,6 +121,7 @@ struct Ctx {
 /// 覆盖层窗口。
 pub struct CatOverlay {
     pub window: gtk::Window,
+    ctx: Rc<Ctx>,
     events: Rc<RefCell<Vec<OverlayEvent>>>,
 }
 
@@ -220,6 +229,7 @@ impl CatOverlay {
             tried: Cell::new(false),
             failed: Cell::new(false),
             last_geo: Cell::new((f64::NAN, f64::NAN, -1, -1, f64::NAN)),
+            alive: Cell::new(true),
             bar: bar.clone(),
             countdown: countdown.clone(),
             hint: hint.clone(),
@@ -283,7 +293,10 @@ impl CatOverlay {
         // 1) 点窗口关闭按钮 / Alt+F4
         {
             let ev = events.clone();
+            let c = ctx.clone();
             window.connect_close_request(move |_| {
+                // 窗口被外部关掉时也要停掉定时器，否则它们会一直空转
+                c.alive.set(false);
                 ev.borrow_mut().push(OverlayEvent::Dismissed);
                 glib::Propagation::Proceed
             });
@@ -326,7 +339,7 @@ impl CatOverlay {
         }
 
         begin(
-            ctx,
+            ctx.clone(),
             events.clone(),
             animation_mode,
             walk_video,
@@ -334,7 +347,11 @@ impl CatOverlay {
             break_minutes,
         );
 
-        Self { window, events }
+        Self {
+            window,
+            ctx,
+            events,
+        }
     }
 
     pub fn take_events(&self) -> Vec<OverlayEvent> {
@@ -343,16 +360,22 @@ impl CatOverlay {
     }
 
     pub fn close(&self) {
+        // 先停定时器再关窗：两个定时器都持有 Ctx，不停会一直空转
+        self.ctx.alive.set(false);
         self.window.close();
     }
 }
 
-/// 单一节拍驱动整个覆盖层：几何动画、视频、倒计时全部由时间推进。
+/// 驱动整个覆盖层：几何动画、视频、倒计时全部由时间推进。
 ///
-/// 用「一个循环 + 时间戳」而不是「四五个嵌套 timeout」的原因：
+/// 用「时间戳 + 定时器」而不是「四五个嵌套 timeout」的原因：
 /// 旧实现里动画启动挂在「mpv 出第一帧」的回调链上（50ms 等 player →
 /// 再 30ms 取尺寸 → 尺寸为 0 就直接放弃且不再重试），
 /// 只要 mpv 慢一点或失败，猫就永远不出现，而且没有任何重试机会。
+///
+/// 两个定时器分工：
+///   · 8ms 渲染泵 —— 只负责把 mpv 的新帧 queue_render 出去；
+///   · 16ms 逻辑节拍 —— 几何动画、事件泵、倒计时。
 fn begin(
     ctx: Rc<Ctx>,
     events: Rc<RefCell<Vec<OverlayEvent>>>,
@@ -369,7 +392,35 @@ fn begin(
     let t0 = Instant::now();
     let total_secs = break_minutes.max(1) as u64 * 60;
 
+    // ── 渲染泵 ────────────────────────────────────────────────────
+    // 单独用 8ms 轮询 mpv 的「有新帧」标志，命中就 queue_render。
+    // 之前这件事混在 40ms 的逻辑节拍里做，等于把播放上限压到 25fps（卡顿）。
+    // 不用 add_tick_callback 的原因：那会让整个全屏窗口每帧都重绘，
+    // 空闲时也一直烧 GPU；这里只在真有新帧时才 queue_render。
+    {
+        let ctx_pump = ctx.clone();
+        glib::timeout_add_local(Duration::from_millis(RENDER_PUMP_MS), move || {
+            if !ctx_pump.alive.get() {
+                return glib::ControlFlow::Break;
+            }
+            let need = ctx_pump
+                .player
+                .borrow_mut()
+                .as_mut()
+                .map(|p| p.take_update_flag())
+                .unwrap_or(false);
+            if need {
+                ctx_pump.frames.set(ctx_pump.frames.get() + 1);
+                ctx_pump.gl_area.queue_render();
+            }
+            glib::ControlFlow::Continue
+        });
+    }
+
     glib::timeout_add_local(Duration::from_millis(TICK_MS), move || {
+        if !ctx.alive.get() {
+            return glib::ControlFlow::Break;
+        }
         let t = t0.elapsed().as_millis() as f64;
 
         // 1) 几何初始化：窗口尺寸没准备好就一直重试（旧实现在这里直接放弃）
@@ -415,15 +466,11 @@ fn begin(
             apply_geometry(&ctx);
         }
 
-        // 4) 视频帧驱动 + 事件泵
+        // 4) 事件泵（渲染已由上面的 8ms 渲染泵负责）
         let mut ended = false;
         {
             let mut p = ctx.player.borrow_mut();
             if let Some(player) = p.as_mut() {
-                if player.take_update_flag() {
-                    ctx.frames.set(ctx.frames.get() + 1);
-                    ctx.gl_area.queue_render();
-                }
                 ended = player.pump_events();
                 if let Some(a) = player.aspect() {
                     *ctx.aspect.borrow_mut() = a;

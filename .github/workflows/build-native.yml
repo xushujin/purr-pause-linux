@@ -109,18 +109,6 @@ jobs:
           # 把构建环境写进 key，保证缓存与构建机版本严格对应。
           key: ubuntu-22.04
 
-      # 序列号一致性校验。
-      # fixtures.json 含私钥 seed，已 gitignore，因此公开仓库的 CI 跑的是
-      # 「无密钥自检」分支：校验序列号解析顺序、验签链路与抗篡改。
-      # 本地持有 fixtures.json 时会跑完整分支（含签名字节逐字节比对）。
-      - name: License signature parity test
-        run: |
-          cd tools/sig-fixtures
-          mkdir -p src
-          cp verify.rs src/main.rs
-          cargo run --quiet
-          rm -rf src target Cargo.lock
-
       - name: Build
         working-directory: native
         run: ./build-deb.sh

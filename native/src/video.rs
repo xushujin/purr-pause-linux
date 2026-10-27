@@ -293,6 +293,8 @@ const FLIP_Y: c_int = 1;
 
 /// `GL_FRAMEBUFFER_BINDING`
 const GL_FRAMEBUFFER_BINDING: u32 = 0x8CA6;
+/// `GL_RGBA8` —— 告诉 mpv 目标 FBO 是带 alpha 的 8 位 RGBA。
+const GL_RGBA8: c_int = 0x8058;
 type GlGetIntegerv = unsafe extern "C" fn(u32, *mut c_int);
 type GlClearColor = unsafe extern "C" fn(f32, f32, f32, f32);
 type GlClear = unsafe extern "C" fn(u32);
@@ -472,8 +474,12 @@ impl VideoPlayer {
         //    因此逐个容错处理。
         let opts: Vec<(&str, &str)> = vec![
             ("vo", "libmpv"),
-            // 硬件解码不可用时自动回落到软解
-            ("hwdec", "auto-safe"),
+            // ⚠️ **必须软解**。素材是 VP9 + Alpha（Matroska 的 BlockAdditional
+            //    透明平面），硬件解码（VAAPI/NVDEC 等）只输出 YUV 主平面，
+            //    **会丢掉 alpha 通道** → 实测表现就是「绿幕没去掉」，
+            //    猫背后露出一整块绿底。auto-safe 在多数机器上会选中硬解，
+            //    所以这里显式关掉。
+            ("hwdec", "no"),
             // 禁用音频（猫咪动画无声）
             ("audio", "no"),
             ("really-quiet", "yes"),
@@ -703,11 +709,16 @@ impl VideoPlayer {
         if w <= 0 || h <= 0 || self.render_ctx.is_null() {
             return;
         }
+        let fbo_id = current_fbo();
         let mut fbo = MpvOpenglFbo {
-            fbo: current_fbo(),
+            fbo: fbo_id,
             w,
             h,
-            internal_format: 0,
+            // ⚠️ internal_format 传 0 会被 mpv 当成「默认帧缓冲」处理，
+            //    alpha 通道可能被丢弃（表现为视频里的绿底透出来）。
+            //    GTK 的 GLArea 渲染到自己的离屏 FBO，那里是 RGBA8，
+            //    所以这里显式告诉 mpv。fbo==0 时才保持 0（默认帧缓冲）。
+            internal_format: if fbo_id == 0 { 0 } else { GL_RGBA8 },
         };
         let mut flip_y: c_int = FLIP_Y;
         // 先把 FBO 清成透明黑：mpv 只覆盖视频区域（宽高比不同时四周留空），

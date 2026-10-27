@@ -13,7 +13,6 @@
 //!     libmpv 在运行时 dlopen，兼容 libmpv.so.2 / libmpv.so.1
 
 mod core;
-mod license;
 mod message;
 mod ui;
 mod video;
@@ -30,7 +29,6 @@ use std::time::{Duration, Instant};
 use core::config::{self, Config};
 use core::idle;
 use core::logger::Logger;
-use license::LicenseStatus;
 use std::sync::atomic::{AtomicBool, Ordering};
 use ui::overlay::{CatOverlay, OverlayEvent};
 use ui::tray::{Tray, TrayItem};
@@ -245,17 +243,6 @@ fn main() {
         log_line(&state, &format!("应用启动, 版本 {}", env!("CARGO_PKG_VERSION")));
         log_line(&state, &format!("空闲检测方式: {}", idle::detection_method()));
 
-        // 检查授权
-        let status = license::check_status();
-        log_line(
-            &state,
-            &format!("许可证状态: {:?}", status.status),
-        );
-
-        if status.status == LicenseStatus::Expired && mode != RunMode::Test {
-            show_activation(&state);
-        }
-
         build_tray(&state);
         start_monitoring(&state);
         start_message_poll(&state);
@@ -317,13 +304,8 @@ fn main() {
             dbg_trace("activate：⚠️ STATE 未初始化（startup 未跑过？），忽略");
             return;
         };
-        if license::check_status().status == LicenseStatus::Expired {
-            dbg_trace("activate：授权过期 → 打开激活窗口");
-            show_activation(&state);
-        } else {
-            dbg_trace("activate：打开设置窗口");
-            open_settings(&state);
-        }
+        dbg_trace("activate：打开设置窗口");
+        open_settings(&state);
     });
 
     let code = app.run();
@@ -874,13 +856,6 @@ thread_local! {
 
 fn build_tray_items(state: &Rc<RefCell<AppState>>) -> Vec<TrayItem> {
     let s = state.borrow();
-    let status = license::check_status();
-    let status_label = match status.status {
-        LicenseStatus::Trial => format!("试用中（剩余 {} 天）", status.days_left),
-        LicenseStatus::Active if status.is_permanent => "已激活（永久）".to_string(),
-        LicenseStatus::Active => format!("已激活（剩余 {} 天）", status.days_left),
-        LicenseStatus::Expired => "未激活".to_string(),
-    };
 
     let remaining = if s.is_paused {
         "监控已暂停".to_string()
@@ -894,20 +869,12 @@ fn build_tray_items(state: &Rc<RefCell<AppState>>) -> Vec<TrayItem> {
         format!("距下次休息: {mins} 分钟")
     };
 
-    let mut items = vec![
-        TrayItem {
-            label: status_label,
-            sensitive: false,
-            submenu: None,
-            action: None,
-        },
-        TrayItem {
-            label: remaining,
-            sensitive: false,
-            submenu: None,
-            action: None,
-        },
-    ];
+    let mut items = vec![TrayItem {
+        label: remaining,
+        sensitive: false,
+        submenu: None,
+        action: None,
+    }];
 
     // 待办消息：点击打开列表窗口
     let st_msg = state.clone();
@@ -968,14 +935,6 @@ fn build_tray_items(state: &Rc<RefCell<AppState>>) -> Vec<TrayItem> {
         sensitive: true,
         submenu: None,
         action: Some(Box::new(move || open_settings(&st_settings))),
-    });
-
-    let st_act = state.clone();
-    items.push(TrayItem {
-        label: "激活/续期".to_string(),
-        sensitive: true,
-        submenu: None,
-        action: Some(Box::new(move || show_activation(&st_act))),
     });
 
     let st_log = state.clone();
@@ -1202,14 +1161,4 @@ fn open_settings(state: &Rc<RefCell<AppState>>) {
             open_log_dir(&st_log);
         },
     );
-}
-
-fn show_activation(state: &Rc<RefCell<AppState>>) {
-    // 同 open_settings：别让全屏覆盖层把激活窗口压在下面
-    close_overlays(state);
-    let st = state.clone();
-    ui::activation::present(move || {
-        log_line(&st, "激活成功");
-        refresh_tray(&st);
-    });
 }

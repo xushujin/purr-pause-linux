@@ -17,7 +17,7 @@
 - 托盘菜单显示距下次休息剩余时间
 - 开机自动启动
 - 支持自定义 webm 视频素材
-- 机器码绑定的序列号激活系统（7 天免费试用）
+- **安装即全功能**：无授权码、无试用期限制
 - 系统托盘常驻，不占用任务栏
 - 单实例运行，重复启动会立即退出
 - 消息提醒（待办通知，可选模块，默认关闭）：轮询第三方待办接口，有新待办时提醒并在托盘显示角标
@@ -70,8 +70,8 @@ cd native
 ## 使用
 
 1. 安装后自动在系统托盘显示肥猫图标
-2. 右键托盘图标可以：待办消息、暂停监控、设置、激活/续期、查看日志、立即测试、退出
-3. 托盘菜单显示激活状态、距下次休息的剩余时间和软件版本号
+2. 右键托盘图标可以：待办消息、暂停监控、设置、查看日志、立即测试、退出
+3. 托盘菜单显示距下次休息的剩余时间和软件版本号
 4. 屏幕使用时间到达阈值后，猫咪自动出现在所有显示器上
 5. 可点击"再等 5 分钟"延后休息（最多 2 次）
 6. 点击"精力充沛！"按钮结束休息；倒计时结束后会自动关闭
@@ -98,10 +98,10 @@ GNOME 默认不显示第三方托盘图标（需要 `gnome-shell-extension-appin
 |------|------|------|
 | 屏幕使用时间 | 连续使用多久后提醒 | 1-480 分钟 |
 | 休息时长 | 每次休息持续多久 | 1-60 分钟 |
-| 动画模式 | 猫咪出现的方式（切换需激活） | 中央走出 / 右下角走出 / 中央淡入 / 右侧走出 |
-| 素材目录 | 自定义视频素材路径（需激活） | — |
+| 动画模式 | 猫咪出现的方式 | 中央走出 / 右下角走出 / 中央淡入 / 右侧走出 |
+| 素材目录 | 自定义视频素材路径（可直接输入或浏览选择） | — |
 | 开机自动启动 | 写入 `~/.config/autostart/purr-pause-linux.desktop` | 开/关 |
-| 写入日志 | 记录计时、激活与消息提醒过程，输出到 `~/.local/share/purr-pause-linux/logs/` | 开/关 |
+| 写入日志 | 记录计时与消息提醒过程，输出到 `~/.local/share/purr-pause-linux/logs/` | 开/关 |
 
 点「保存」后窗口不会关闭，顶部会弹出「设置已保存」提示条 ——
 看到提示就说明配置已经写进 `~/.local/share/purr-pause-linux/config.json`。
@@ -117,7 +117,7 @@ purr-pause-linux --selftest
 ```
 
 它会逐项报告：系统与会话类型、GTK 版本、显示器、libmpv 是否可加载、
-素材文件是否存在、配置目录是否可写、空闲检测方式、托盘宿主是否存在、授权状态。
+素材文件是否存在、配置目录是否可写、空闲检测方式、托盘宿主是否存在。
 
 屏保相关的额外线索：覆盖层里如果出现「视频渲染不可用，已降级为静态猫咪」之类的
 提示，说明 mpv / OpenGL 那一环有问题，但应用会继续以静态猫图工作，不会黑屏。
@@ -148,35 +148,12 @@ purr-pause-linux --selftest
 - 点击某条待办用默认浏览器打开，并在本地清理（不回写第三方）
 - 仅允许打开 `http(s)` 链接；请求头不写日志
 
-## 序列号
+## 授权
 
-### 激活流程
+**native 版（Linux）已移除授权功能**：安装即全功能，没有机器码、没有序列号、
+没有试用期，所有设置项都可以直接修改保存。
 
-1. 用户在激活窗口中复制自己的 **机器码**（16 位）
-2. 将机器码发送给开发者
-3. 开发者生成绑定该机器的序列号
-4. 用户输入序列号完成激活
-
-序列号格式：以 `PP-` 为前缀，后接 Base64 编码数据，并按每 8 个字符用 `-` 分隔。
-每个序列号绑定特定机器，不可在其他设备上使用。
-
-### 生成序列号（开发者）
-
-> ⚠️ `tools/keygen.js` 含 Ed25519 发号私钥，**已被 `.gitignore` 排除，不随仓库分发**。
-> 从私有备份恢复后再使用：
-> ```bash
-> cp ~/purr-pause-backup-private/keygen.js tools/
-> ```
-
-```bash
-node tools/keygen.js --mid <机器码> --days 30   # 30 天
-node tools/keygen.js --mid <机器码> --days 365  # 1 年
-node tools/keygen.js --mid <机器码> --permanent # 永久
-node tools/keygen.js --verify <序列号>          # 验证
-```
-
-> **切勿将 `keygen.js` 提交到公开仓库。** 私钥一旦公开，任何人都能生成
-> 任意天数的序列号绕过付费。公钥部分在 `native/src/license/mod.rs` 中，是公开的。
+`tools/keygen.js` 与 `tools/sig-fixtures/` 仅保留给 Electron 版使用，与 native 版无关。
 
 ## 开发
 
@@ -194,12 +171,10 @@ rustup target add x86_64-unknown-linux-gnu
 cargo build --release --target x86_64-unknown-linux-gnu
 ```
 
-### 序列号一致性校验
+### 序列号一致性校验（Electron 版，与 native 无关）
 
-序列号的签发端（`tools/keygen.js`）与验证端（`native/src/license/`）
-必须产生完全一致的字节，否则用户会无法激活。
-
-改动激活逻辑后务必跑：
+Electron 版的签发端（`tools/keygen.js`）与验证端必须产生完全一致的字节。
+改动那套逻辑后跑：
 
 ```bash
 cd tools/sig-fixtures
@@ -235,14 +210,13 @@ purr-pause-linux/
 │   │   └── icons/
 │   └── src/
 │       ├── main.rs          # 入口：托盘、计时、覆盖层、消息轮询
-│       ├── license/         # 序列号验证与激活
 │       ├── core/            # 配置 / 空闲检测 / 日志 / 开机自启
 │       ├── message/         # 待办轮询与差集检测
-│       ├── ui/              # 覆盖层 / 设置 / 激活 / 待办列表 / 托盘
+│       ├── ui/              # 覆盖层 / 设置 / 待办列表 / 托盘
 │       └── video.rs         # libmpv 解码 + 渲染到 GtkGLArea（运行时 dlopen libmpv）
 ├── tools/
-│   ├── keygen.js            # 序列号生成器（含私钥，已 gitignore，需从私有备份恢复）
-│   ├── sig-fixtures/        # 跨语言签名等价性回归测试
+│   ├── keygen.js            # Electron 版序列号生成器（native 版已不需要）
+│   ├── sig-fixtures/        # Electron 版跨语言签名等价性回归测试
 │   └── uninstall-linux.sh   # 卸载脚本
 ├── docs/
 │   └── message-api-spec.md  # 第三方待办接口对接规范
@@ -257,8 +231,7 @@ purr-pause-linux/
 - libmpv —— webm（VP9 + Alpha）解码，经 render API 渲染进 GtkGLArea；
   运行时 dlopen（`libmpv.so.2` → `libmpv.so.1`），不绑定具体版本
 - reqwest —— 第三方待办接口轮询
-- ed25519-dalek —— 序列号签名验证
-- AppIndicator —— 系统托盘
+- 自实现 D-Bus StatusNotifierItem —— 系统托盘（GTK4 下无法再用 libappindicator）
 
 **无原生扩展依赖**，除系统 GTK4 与 libmpv 外全部为纯 Rust 实现。
 
