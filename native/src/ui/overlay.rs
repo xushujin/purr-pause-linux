@@ -727,10 +727,17 @@ fn install_css() {
            漏掉任何一条都可能露出一块不透明底色（实测是黑底）。 */
         window.cat-overlay,
         window.cat-overlay.background {
+            background: none;
             background-color: transparent;
             background-image: none;
             box-shadow: none;
             border: none;
+            outline: none;
+        }
+        /* 内容层也确保不铺底色 */
+        window.cat-overlay > box,
+        window.cat-overlay fixed {
+            background-color: transparent;
         }
         .cat-bar {
             background-color: rgba(0, 0, 0, 0.66);
@@ -757,10 +764,14 @@ fn install_css() {
         "#,
     );
     if let Some(display) = gtk::gdk::Display::default() {
+        // ⚠️ 用 **USER 优先级**（800）而不是 APPLICATION（600）。
+        //    libadwaita / 桌面主题可能用更高的优先级给 `window` 铺不透明底色，
+        //    APPLICATION 级压不住 —— 表现就是「窗口永远是黑的，CSS 像没生效」。
+        //    USER 之上没有别的应用级 provider，这层一定赢。
         gtk::style_context_add_provider_for_display(
             &display,
             &css,
-            gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
+            gtk::STYLE_PROVIDER_PRIORITY_USER + 1,
         );
         // ⚠️ 只有真的挂上去了才置位。否则「第一次拿不到 Display」会把
         //    LOADED 永久置位，之后每次覆盖层都是不透明白底（看起来像黑屏）。
