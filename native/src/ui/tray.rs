@@ -308,38 +308,46 @@ impl Tray {
             Some(&params),
         );
     }
-    /// 只更新某个条目的 label，并广播 `ItemsPropertiesUpdated`。
+    /// 批量更新若干条目的 label / enabled，广播 `ItemsPropertiesUpdated`。
     ///
-    /// 为什么不直接 `set_menu` 重建：dbusmenu 的宿主（GNOME 扩展）是按
-    /// 「布局树 + 条目 id」维护菜单模型的。每次重建都会换一套 id 并广播
-    /// `LayoutUpdated`，宿主如果处理不干净就会错位 —— 实测用户看到的是
-    /// **菜单项动作整体错开一位、末尾多出一个「退出」**。
-    /// 所以结构固定、id 固定，只把会变的那一个 label 推过去。
-    pub fn update_label(&mut self, id: i32, label: &str) {
-        let (props, menu_path) = {
+    /// 这是 dbusmenu 的**增量更新**通道，宿主（GNOME 扩展）对它支持最好。
+    /// 相比之下 `LayoutUpdated` + 重新 `GetLayout` 那条路实测并不可靠：
+    /// 用户点了「暂停 30 分钟」，程序确实暂停了（日志可证），
+    /// 但菜单重新打开还是旧样子。
+    pub fn update_items(&mut self, updates: &[(i32, String, bool)]) {
+        if updates.is_empty() {
+            return;
+        }
+        let (arr, menu_path) = {
             let mut sh = self.shared.borrow_mut();
-            let Some(node) = sh.items.get_mut(&id) else {
-                return;
-            };
-            if node.label == label {
-                return;
-            }
-            node.label = label.to_string();
+            let mut rows: Vec<glib::Variant> = Vec::new();
+            for (id, label, enabled) in updates {
+                let Some(node) = sh.items.get_mut(id) else {
+                    continue;
+                };
+                node.label = label.clone();
+                node.enabled = *enabled;
 
-            // a{sv} 的 value 必须包一层 v
-            let entries = vec![glib::Variant::from_dict_entry(
-                &"label".to_variant(),
-                &glib::Variant::from_variant(&label.to_variant()),
-            )];
-            (array_of("{sv}", entries), sh.menu_path.clone())
+                let entries = vec![
+                    glib::Variant::from_dict_entry(
+                        &"label".to_variant(),
+                        &glib::Variant::from_variant(&label.to_variant()),
+                    ),
+                    glib::Variant::from_dict_entry(
+                        &"enabled".to_variant(),
+                        &glib::Variant::from_variant(&enabled.to_variant()),
+                    ),
+                ];
+                rows.push(glib::Variant::tuple_from_iter([
+                    id.to_variant(),
+                    array_of("{sv}", entries),
+                ]));
+            }
+            (array_of("(ia{sv})", rows), sh.menu_path.clone())
         };
 
-        let updated = array_of(
-            "(ia{sv})",
-            vec![glib::Variant::tuple_from_iter([id.to_variant(), props])],
-        );
         let removed = array_of("(ias)", Vec::<glib::Variant>::new());
-        let params = glib::Variant::tuple_from_iter([updated, removed]);
+        let params = glib::Variant::tuple_from_iter([arr, removed]);
         let _ = self.conn.emit_signal(
             None,
             &menu_path,
@@ -348,6 +356,7 @@ impl Tray {
             Some(&params),
         );
     }
+
 }
 
 /// 把单个条目（及其子树）插入 items 表并挂到 parent 下。

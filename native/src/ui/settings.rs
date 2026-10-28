@@ -62,6 +62,9 @@ pub fn present<F, T, L>(
     window.set_application(Some(app));
 
     let header = adw::HeaderBar::new();
+    // ⚠️ 关掉标题栏自带的 ⊖□× —— 那个 × 走的是 gtk_window_close()，
+    //    实测在这台机器上点了没反应。只保留我们自己的「关闭」（destroy）。
+    header.set_show_end_title_buttons(false);
     let save_btn = gtk::Button::with_label("保存");
     save_btn.add_css_class("suggested-action");
     let cancel_btn = gtk::Button::with_label("关闭");
@@ -308,6 +311,21 @@ pub fn present<F, T, L>(
     //    拆掉，不依赖任何外部条件。
     let win3 = window.clone();
     cancel_btn.connect_clicked(move |_| win3.destroy());
+
+    // Esc 也能关（第二条逃生通道）
+    {
+        let win = window.clone();
+        let key = gtk::EventControllerKey::new();
+        key.connect_key_pressed(move |_, k, _, _| {
+            if k == gtk::gdk::Key::Escape {
+                win.destroy();
+                gtk::glib::Propagation::Stop
+            } else {
+                gtk::glib::Propagation::Proceed
+            }
+        });
+        window.add_controller(key);
+    }
 
     // 存入槽（强引用持有）+ 销毁时清槽：
     // 用户点标题栏 X / 关闭后窗口销毁，下次打开能拿到最新配置重建。

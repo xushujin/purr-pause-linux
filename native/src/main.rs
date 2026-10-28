@@ -646,8 +646,8 @@ thread_local! {
     /// GtkApplication 句柄，startup 时写入。
     /// 设置窗口要 `set_application()` 才能被应用管理（窗口列表 / 前置 / 分组）。
     static APP: RefCell<Option<adw::Application>> = const { RefCell::new(None) };
-    /// 上一次下发的托盘菜单内容签名，用于去重（见 refresh_tray 的说明）。
-    static TRAY_SIG: RefCell<String> = const { RefCell::new(String::new()) };
+    /// 上一次下发的托盘菜单（label + enabled），用于做增量 diff。
+    static TRAY_STATE: RefCell<Vec<(String, bool)>> = const { RefCell::new(Vec::new()) };
 }
 
 fn build_tray_items(state: &Rc<RefCell<AppState>>) -> Vec<TrayItem> {
@@ -763,53 +763,46 @@ fn refresh_tray(state: &Rc<RefCell<AppState>>) {
         return;
     }
 
-    // 第一个条目是「距下次休息: N 分钟」，它每分钟都会变。
-    // **绝不能**因为它变化就整份重建菜单：重建会换一套 id + 广播 LayoutUpdated，
-    // 宿主处理不干净就会错位（实测：动作整体错开一位、末尾多出一个「退出」）。
-    // 结构签名只看其余条目，变了才重建；只有倒计时变了就单独推一个 label。
-    let head_label = items[0].label.clone();
-    let rest_sig = tray_signature(&items[1..]);
-    let rest_changed = TRAY_SIG.with(|s| {
-        let mut cur = s.borrow_mut();
-        if *cur == rest_sig {
-            false
-        } else {
-            *cur = rest_sig;
-            true
-        }
-    });
+    // 结构固定（条目数不变）时，**只推变化的属性**，走 dbusmenu 的
+    // ItemsPropertiesUpdated 增量通道 —— 这是宿主支持最好的路径。
+    //
+    // 之前走的是「整份 set_menu + LayoutUpdated」，实测宿主根本不重新拉取：
+    // 用户点了「暂停 30 分钟」，程序确实暂停了（日志可证），
+    // 但菜单重新打开还是旧样子，看不到勾选。
+    let now: Vec<(String, bool)> = items
+        .iter()
+        .map(|i| (i.label.clone(), i.sensitive))
+        .collect();
+    let prev = TRAY_STATE.with(|c| c.borrow().clone());
 
+    if prev.len() != now.len() {
+        // 首次或结构变化 → 整份重建
+        TRAY_STATE.with(|c| *c.borrow_mut() = now);
+        TRAY.with(|t| {
+            if let Some(tray) = t.borrow_mut().as_mut() {
+                tray.set_menu(items);
+            }
+        });
+        return;
+    }
+
+    let updates: Vec<(i32, String, bool)> = now
+        .iter()
+        .enumerate()
+        .filter(|(i, (label, enabled))| prev[*i].0 != *label || prev[*i].1 != *enabled)
+        .map(|(i, (label, enabled))| ((i + 1) as i32, label.clone(), *enabled))
+        .collect();
+    if updates.is_empty() {
+        return;
+    }
+    TRAY_STATE.with(|c| *c.borrow_mut() = now);
     TRAY.with(|t| {
         if let Some(tray) = t.borrow_mut().as_mut() {
-            if rest_changed {
-                tray.set_menu(items);
-            } else {
-                // 第一个条目在 set_menu 里的 id 恒为 1
-                tray.update_label(1, &head_label);
-            }
+            tray.update_items(&updates);
         }
     });
 }
 
-/// 菜单内容签名（标签 + 可用性 + 层级结构）。动作闭包无法比较，
-/// 但它们总是跟着内容一起重建，所以按内容判等足够。
-fn tray_signature(items: &[TrayItem]) -> String {
-    fn walk(items: &[TrayItem], out: &mut String) {
-        for it in items {
-            out.push_str(&it.label);
-            out.push(if it.sensitive { '1' } else { '0' });
-            if let Some(sub) = &it.submenu {
-                out.push('[');
-                walk(sub, out);
-                out.push(']');
-            }
-            out.push('\n');
-        }
-    }
-    let mut s = String::new();
-    walk(items, &mut s);
-    s
-}
 
 /// 在文件管理器中打开日志目录。
 fn open_log_dir(state: &Rc<RefCell<AppState>>) {

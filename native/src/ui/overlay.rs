@@ -736,8 +736,10 @@ fn install_css() {
         }
         /* 内容层也确保不铺底色 */
         window.cat-overlay > box,
-        window.cat-overlay fixed {
+        window.cat-overlay fixed,
+        window.cat-overlay glarea {
             background-color: transparent;
+            background-image: none;
         }
         .cat-bar {
             background-color: rgba(0, 0, 0, 0.66);
