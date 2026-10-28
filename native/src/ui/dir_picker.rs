@@ -29,7 +29,7 @@ thread_local! {
 }
 
 /// 弹出目录选择器。用户确认时回调 `on_pick(选中的目录)`。
-pub fn pick<F>(parent: &adw::Window, start: Option<PathBuf>, on_pick: F)
+pub fn pick<F>(parent: &impl IsA<gtk::Window>, start: Option<PathBuf>, on_pick: F)
 where
     F: Fn(PathBuf) + 'static,
 {

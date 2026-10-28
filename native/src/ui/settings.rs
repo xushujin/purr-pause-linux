@@ -23,7 +23,7 @@ thread_local! {
     /// ⚠️ 必须强引用持有：present() 之后本函数返回、局部句柄析构，
     /// 若无其他引用，窗口可能随之销毁（表现为看不到窗口 / 闪一下就没了）。
     /// 同时用于单例：已打开时直接前置聚焦，不再开第二个。
-    static OPEN_WIN: RefCell<Option<adw::Window>> = const { RefCell::new(None) };
+    static OPEN_WIN: RefCell<Option<gtk::Window>> = const { RefCell::new(None) };
 }
 
 /// 打开设置窗口。
@@ -49,9 +49,14 @@ pub fn present<F, T, L>(
         return;
     }
 
-    let window = adw::Window::builder()
+    // ⚠️ 用普通 gtk::Window，**不要**在内容里塞自绘 HeaderBar。
+    //
+    // 之前用 adw::Window + 内容顶部 HeaderBar：标题栏区域和窗口管理器画出来的
+    // 装饰叠在一起，用户点「关闭」完全没反应（v1.9.x 反复出现）。
+    // 现在交给窗口管理器画标题栏 —— 系统自带的「×」在任何桌面上都能关窗口，
+    // 这是最不容易出错的一条路；页面底部再放一组「关闭 / 保存」。
+    let window = gtk::Window::builder()
         .title("胖猫暂停一下（PurrPause） 设置")
-        .modal(false)
         .resizable(true)
         .default_width(480)
         .build();
@@ -61,15 +66,19 @@ pub fn present<F, T, L>(
     //    会新建一个空 id 的 Application 实例，不是「取当前应用」。
     window.set_application(Some(app));
 
-    let header = adw::HeaderBar::new();
-    // ⚠️ 关掉标题栏自带的 ⊖□× —— 那个 × 走的是 gtk_window_close()，
-    //    实测在这台机器上点了没反应。只保留我们自己的「关闭」（destroy）。
-    header.set_show_end_title_buttons(false);
     let save_btn = gtk::Button::with_label("保存");
     save_btn.add_css_class("suggested-action");
     let cancel_btn = gtk::Button::with_label("关闭");
-    header.pack_start(&cancel_btn);
-    header.pack_end(&save_btn);
+
+    // 底部按钮条
+    let bottom = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+    bottom.set_halign(gtk::Align::End);
+    bottom.set_margin_start(12);
+    bottom.set_margin_end(12);
+    bottom.set_margin_top(8);
+    bottom.set_margin_bottom(12);
+    bottom.append(&cancel_btn);
+    bottom.append(&save_btn);
 
     let page = adw::PreferencesPage::new();
 
@@ -267,10 +276,11 @@ pub fn present<F, T, L>(
     //    标题栏必须作为内容顶部的工具条：垂直 GtkBox 包 HeaderBar + 内容。
     //    这是 libadwaita 1.1 起的标准写法（1.2+ 也可用 ToolbarView，取兼容写法）。
     page.set_vexpand(true);
+    toast_overlay.set_vexpand(true);
     let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    root.append(&header);
     root.append(&toast_overlay);
-    window.set_content(Some(&root));
+    root.append(&bottom);
+    window.set_child(Some(&root));
 
     // ── 保存 ────────────────────────────────────────────────────
     let cfg_cell: Rc<RefCell<Config>> = Rc::new(RefCell::new(current.clone()));
