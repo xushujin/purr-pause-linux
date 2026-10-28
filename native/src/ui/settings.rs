@@ -26,6 +26,28 @@ thread_local! {
     static OPEN_WIN: RefCell<Option<gtk::Window>> = const { RefCell::new(None) };
 }
 
+/// 设置窗口当前是否打开（可见）。
+pub fn is_open() -> bool {
+    OPEN_WIN.with(|s| {
+        s.borrow()
+            .as_ref()
+            .map(|w| w.is_visible())
+            .unwrap_or(false)
+    })
+}
+
+/// 强制关闭设置窗口（如果开着）。
+///
+/// 供托盘菜单的「关闭设置」使用 —— 托盘点击是本项目唯一被实测确认可用的
+/// 交互通道，窗口内部的按钮在某些环境上收不到点击，所以必须留这条后路。
+pub fn close_if_open() {
+    let w = OPEN_WIN.with(|s| s.borrow_mut().take());
+    if let Some(w) = w {
+        w.set_visible(false);
+        w.destroy();
+    }
+}
+
 /// 打开设置窗口。
 ///
 /// - `on_save`：用户点「保存」时触发（已含新配置）。

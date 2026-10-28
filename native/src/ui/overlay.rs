@@ -375,7 +375,15 @@ impl CatOverlay {
     pub fn close(&self) {
         // 先停定时器再关窗：两个定时器都持有 Ctx，不停会一直空转
         self.ctx.alive.set(false);
-        self.window.close();
+
+        // ⚠️ 用「隐藏 + 销毁」，不要用 close()。
+        //
+        // close() 依赖 close_request 信号与窗口管理器协作，实测在这台机器上
+        // 点了没反应（设置窗口的「关闭」按钮就是同一个毛病）。
+        // 如果这里也失效，全屏覆盖层会**一直留在屏幕上** ——
+        // 用户看到的就是「休息结束了屏幕还是黑的」。
+        self.window.set_visible(false);
+        self.window.destroy();
     }
 }
 

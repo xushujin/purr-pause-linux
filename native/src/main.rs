@@ -709,12 +709,20 @@ fn build_tray_items(state: &Rc<RefCell<AppState>>) -> Vec<TrayItem> {
         items.push(pause_item(state, "暂停到手动恢复", 0, paused && pm == 0));
     }
 
+    // 设置：**同一个菜单项开/关**。
+    //
+    // 窗口里的「关闭」按钮在某些环境下收不到点击（用户实测），而托盘点击
+    // 是确认可用的通道。所以这里做成开关：开着时点它就是关掉。
     let st_settings = state.clone();
     items.push(TrayItem {
-        label: "设置".to_string(),
+        label: if ui::settings::is_open() {
+            "关闭设置".to_string()
+        } else {
+            "设置".to_string()
+        },
         sensitive: true,
         submenu: None,
-        action: Some(Box::new(move || open_settings(&st_settings))),
+        action: Some(Box::new(move || toggle_settings(&st_settings))),
     });
 
     let st_log = state.clone();
@@ -891,6 +899,18 @@ fn resume_monitoring(state: &Rc<RefCell<AppState>>) {
     refresh_tray(state);
 }
 
+/// 托盘「设置 / 关闭设置」开关。
+fn toggle_settings(state: &Rc<RefCell<AppState>>) {
+    if ui::settings::is_open() {
+        eprintln!("[purr-pause-linux] 从托盘关闭设置窗口");
+        ui::settings::close_if_open();
+    } else {
+        open_settings(state);
+    }
+    // 菜单项文案跟着变（设置 ↔ 关闭设置）
+    refresh_tray(state);
+}
+
 fn open_settings(state: &Rc<RefCell<AppState>>) {
     // 覆盖层是全屏窗口，新开的设置窗口会被它压在下面 ——
     // 用户看到的就是「点了设置，窗口好像开了但完全没法用」。
@@ -938,4 +958,7 @@ fn open_settings(state: &Rc<RefCell<AppState>>) {
             open_log_dir(&st_log);
         },
     );
+
+    // 打开后刷新托盘文案（设置 ↔ 关闭设置）
+    refresh_tray(state);
 }
