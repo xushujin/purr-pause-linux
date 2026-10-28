@@ -540,8 +540,16 @@ fn menu_method(
             }
         }
         "AboutToShow" => {
-            // 布局始终是现成的（set_menu 后即广播），无需触发更新
-            invocation.return_value(Some(&glib::Variant::tuple_from_iter([false.to_variant()])));
+            // ⚠️ 必须返回 true（needUpdate）。
+            //
+            // 返回 false 的意思是「我的布局是最新的，别来取」—— 宿主于是用它
+            // 自己缓存的那份。而我们的 set_menu 之后宿主并不一定老实处理
+            // LayoutUpdated，结果就是：用户点了「暂停 30 分钟」，程序确实暂停了
+            // （日志里 `已暂停监控 30 分钟` 有打），但菜单看起来毫无变化。
+            //
+            // 每次打开菜单重新拉一次布局只有几次 D-Bus 往返，代价极低，
+            // 换来的是「菜单永远显示真实状态」。
+            invocation.return_value(Some(&glib::Variant::tuple_from_iter([true.to_variant()])));
         }
         "AboutToShowGroup" => {
             let empty = array_of("i", Vec::<glib::Variant>::new());

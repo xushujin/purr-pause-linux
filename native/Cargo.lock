@@ -567,7 +567,7 @@ dependencies = [
 
 [[package]]
 name = "purr-pause-linux"
-version = "1.8.1"
+version = "1.9.0"
 dependencies = [
  "dirs",
  "gtk4",

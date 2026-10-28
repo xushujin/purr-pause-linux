@@ -564,6 +564,10 @@ impl VideoPlayer {
                 "vf",
                 "lavfi=[colorkey=0x00AE3E:0.25:0.10]",
             ),
+            // ⚠️ 显式指定内部 FBO 格式带 alpha。
+            //    auto 时 mpv 可能在中间 FBO 上用不带 alpha 的格式，
+            //    渲染链路上把透明像素丢掉，最后只剩黑底。
+            ("fbo-format", "rgba8"),
             ("scale", "bilinear"),
             ("keep-open", "yes"),
             ("keep-open-pause", "yes"),
@@ -766,6 +770,10 @@ impl VideoPlayer {
         self.command(&["loadfile", &url, "replace"])
             .map_err(|e| format!("loadfile 失败：{e}"))?;
         self.loaded = p;
+        // ⚠️ 视频输出（VO）是在第一次 loadfile 时才真正创建的。
+        //    在 initialize 之前设的 alpha 有可能只进了选项缓存没到 VO，
+        //    这里在 VO 已存在之后再设一次（失败会打印，便于排查）。
+        self.set_prop("alpha", "yes");
         Ok(())
     }
 

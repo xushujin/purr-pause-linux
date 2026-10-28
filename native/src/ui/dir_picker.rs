@@ -45,10 +45,11 @@ where
         .unwrap_or_else(|| PathBuf::from("/"));
 
     // 普通 GtkWindow：交给窗口管理器画标题栏（含关闭按钮）。
+    // ⚠️ 不要 modal(true)：模态会抓走输入，一旦这个窗口本身出问题，
+    //    后面的设置窗口就整片点不动（用户反馈「设置窗口无法关闭」多半是这个）。
     let window = gtk::Window::builder()
         .title("选择素材目录")
         .transient_for(parent)
-        .modal(true)
         .resizable(true)
         .default_width(520)
         .default_height(440)
