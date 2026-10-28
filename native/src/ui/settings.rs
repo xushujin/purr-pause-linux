@@ -319,8 +319,19 @@ pub fn present<F, T, L>(
     // ⚠️ 用 destroy() 而不是 close()：close() 走的是 close_request 信号 +
     //    WM 协作，实测在这台机器上「点关闭没反应」。destroy() 直接把顶层窗口
     //    拆掉，不依赖任何外部条件。
+    // 关闭：**先隐藏再销毁**。
+    //
+    // 之前只用 destroy()，用户点了没反应（可能点击根本没到回调，也可能
+    // destroy 在这台机器上被吞掉）。现在把「隐藏」放在前面 —— set_visible(false)
+    // 是最底层的属性操作，不可能失败，窗口一定从屏幕上消失；destroy 再兜底回收。
+    // 同时立刻清掉单例槽，下次打开不会去 present 一个已隐藏的旧窗口。
     let win3 = window.clone();
-    cancel_btn.connect_clicked(move |_| win3.destroy());
+    cancel_btn.connect_clicked(move |_| {
+        eprintln!("[purr-pause-linux] 设置窗口：点击「关闭」");
+        win3.set_visible(false);
+        OPEN_WIN.with(|s| *s.borrow_mut() = None);
+        win3.destroy();
+    });
 
     // Esc 也能关（第二条逃生通道）
     {
@@ -328,6 +339,9 @@ pub fn present<F, T, L>(
         let key = gtk::EventControllerKey::new();
         key.connect_key_pressed(move |_, k, _, _| {
             if k == gtk::gdk::Key::Escape {
+                eprintln!("[purr-pause-linux] 设置窗口：按 Esc 关闭");
+                win.set_visible(false);
+                OPEN_WIN.with(|s| *s.borrow_mut() = None);
                 win.destroy();
                 gtk::glib::Propagation::Stop
             } else {
@@ -340,6 +354,7 @@ pub fn present<F, T, L>(
     // 存入槽（强引用持有）+ 销毁时清槽：
     // 用户点标题栏 X / 关闭后窗口销毁，下次打开能拿到最新配置重建。
     window.connect_destroy(|_| {
+        eprintln!("[purr-pause-linux] 设置窗口已销毁");
         OPEN_WIN.with(|s| *s.borrow_mut() = None);
     });
     OPEN_WIN.with(|s| *s.borrow_mut() = Some(window.clone()));
